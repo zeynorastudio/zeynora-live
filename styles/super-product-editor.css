@@ -1,0 +1,59 @@
+/* Super Admin Product Editor Styles */
+
+.product-editor-tabs {
+  @apply flex border-b border-silver-light mb-6 overflow-x-auto;
+}
+
+.product-editor-tab {
+  @apply px-4 py-3 text-sm font-medium text-silver-dark border-b-2 border-transparent hover:text-night whitespace-nowrap transition-colors;
+}
+
+.product-editor-tab.active {
+  @apply border-gold text-night;
+}
+
+.form-group {
+  @apply space-y-1.5 mb-4;
+}
+
+.form-label {
+  @apply block text-xs font-semibold text-silver-darker uppercase tracking-wide;
+}
+
+.form-input {
+  @apply w-full px-3 py-2 bg-white border border-silver-light rounded-lg focus:outline-none focus:ring-1 focus:ring-gold/50 focus:border-gold transition-all text-sm;
+}
+
+.form-input:disabled {
+  @apply bg-offwhite text-silver-dark cursor-not-allowed opacity-70;
+}
+
+.form-textarea {
+  @apply w-full px-3 py-2 bg-white border border-silver-light rounded-lg focus:outline-none focus:ring-1 focus:ring-gold/50 focus:border-gold transition-all text-sm min-h-[100px];
+}
+
+.tag-chip {
+  @apply inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium bg-offwhite border border-silver-light text-night mr-2 mb-2;
+}
+
+.tag-chip-remove {
+  @apply ml-1.5 text-silver-dark hover:text-red-500 cursor-pointer transition-colors;
+}
+
+.image-grid-item {
+  @apply relative aspect-square rounded-lg border border-silver-light bg-white overflow-hidden;
+}
+
+.image-grid-overlay {
+  @apply absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center gap-2;
+}
+
+.image-upload-zone {
+  @apply border-2 border-dashed border-silver-light rounded-xl p-8 flex flex-col items-center justify-center text-center transition-colors hover:bg-offwhite/50 hover:border-gold cursor-pointer;
+}
+
+.image-upload-zone.active {
+  @apply border-gold bg-gold/5;
+}
+
+

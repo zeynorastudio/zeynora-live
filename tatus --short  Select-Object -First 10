@@ -1,0 +1,17 @@
+warning: in the working copy of 'app/globals.css', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'app/layout.tsx', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'eslint.config.mjs', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'next.config.ts', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'package-lock.json', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'package.json', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'tsconfig.json', LF will be replaced by CRLF the next time Git touches it
+ app/globals.css    |  109 [32m++[m[31m-[m
+ app/layout.tsx     |   15 [32m+[m[31m-[m
+ app/page.tsx       |   65 [31m--[m
+ eslint.config.mjs  |   47 [32m+[m[31m-[m
+ next.config.ts     |   19 [32m+[m[31m-[m
+ package-lock.json  | 2587 [32m++++++++++++++++++++++++++++++++[m[31m--------------------[m
+ package.json       |   41 [32m+[m[31m-[m
+ postcss.config.mjs |    7 [31m-[m
+ tsconfig.json      |   16 [32m+[m[31m-[m
+ 9 files changed, 1806 insertions(+), 1100 deletions(-)

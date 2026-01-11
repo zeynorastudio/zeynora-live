@@ -1,0 +1,52 @@
+/* Admin Inventory Styles */
+
+.stock-input-wrapper {
+  @apply relative flex items-center;
+}
+
+.stock-input {
+  @apply w-20 px-2 py-1 text-sm border border-silver-light rounded text-center transition-colors;
+}
+
+.stock-input:focus {
+  @apply border-gold ring-1 ring-gold outline-none;
+}
+
+.stock-input.saved {
+  @apply bg-green-50 border-green-300 text-green-800;
+  animation: flash-green 1s ease-out;
+}
+
+.stock-input.error {
+  @apply bg-red-50 border-red-300 text-red-800;
+  animation: shake 0.4s ease-in-out;
+}
+
+.low-stock-badge {
+  @apply inline-flex items-center px-2 py-0.5 rounded text-[10px] font-medium bg-orange-100 text-orange-800 border border-orange-200 ml-2;
+}
+
+.out-of-stock-badge {
+  @apply inline-flex items-center px-2 py-0.5 rounded text-[10px] font-medium bg-red-100 text-red-800 border border-red-200 ml-2;
+}
+
+@keyframes flash-green {
+  0% { background-color: #dcfce7; }
+  100% { background-color: white; }
+}
+
+@keyframes shake {
+  0%, 100% { transform: translateX(0); }
+  25% { transform: translateX(-2px); }
+  75% { transform: translateX(2px); }
+}
+
+.bulk-upload-dropzone {
+  @apply border-2 border-dashed border-silver-light rounded-xl p-8 text-center transition-colors hover:border-gold hover:bg-offwhite/50 cursor-pointer;
+}
+
+.bulk-upload-dropzone.drag-active {
+  @apply border-gold bg-gold/5;
+}
+
+

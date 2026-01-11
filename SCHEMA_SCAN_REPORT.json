@@ -1,0 +1,242 @@
+{
+  "scan_date": "2025-01-20",
+  "tables": {
+    "products": {
+      "exists": true,
+      "primary_key": "uid (text)",
+      "columns": {
+        "uid": { "type": "text", "required": true, "primary_key": true },
+        "name": { "type": "text", "required": true },
+        "slug": { "type": "text", "required": true, "unique": true },
+        "category_id": { "type": "uuid", "required": false, "foreign_key": "categories(id)" },
+        "super_category": { "type": "text", "required": false },
+        "subcategory": { "type": "text", "required": false },
+        "style": { "type": "text", "required": false },
+        "occasion": { "type": "z_occasion", "required": false },
+        "season": { "type": "z_season", "required": false },
+        "featured": { "type": "boolean", "required": false, "default": false },
+        "best_selling": { "type": "boolean", "required": false, "default": false },
+        "active": { "type": "boolean", "required": false, "default": true },
+        "price": { "type": "numeric(12,2)", "required": true, "default": 0 },
+        "cost_price": { "type": "numeric(12,2)", "required": false },
+        "profit_percent": { "type": "numeric(5,2)", "required": false },
+        "profit_amount": { "type": "numeric(12,2)", "required": false },
+        "tags": { "type": "text[]", "required": false },
+        "main_image_path": { "type": "text", "required": false },
+        "metadata": { "type": "jsonb", "required": false, "default": "{}" },
+        "created_at": { "type": "timestamptz", "required": true },
+        "updated_at": { "type": "timestamptz", "required": true }
+      },
+      "rls_enabled": false,
+      "missing_columns": ["sort_order"],
+      "notes": "sort_order column missing - needed for reorder tool"
+    },
+    "product_variants": {
+      "exists": true,
+      "primary_key": "id (uuid)",
+      "columns": {
+        "id": { "type": "uuid", "required": true, "primary_key": true },
+        "product_uid": { "type": "text", "required": false, "foreign_key": "products(uid)" },
+        "sku": { "type": "text", "required": true, "unique": true },
+        "color_id": { "type": "uuid", "required": false, "foreign_key": "colors(id)" },
+        "size_id": { "type": "uuid", "required": false, "foreign_key": "sizes(id)" },
+        "stock": { "type": "integer", "required": false, "default": 0 },
+        "price": { "type": "numeric(12,2)", "required": false },
+        "cost": { "type": "numeric(12,2)", "required": false },
+        "active": { "type": "boolean", "required": false, "default": true },
+        "images": { "type": "jsonb", "required": false, "default": "[]" },
+        "tags": { "type": "text[]", "required": false },
+        "metadata": { "type": "jsonb", "required": false, "default": "{}" },
+        "created_at": { "type": "timestamptz", "required": true },
+        "updated_at": { "type": "timestamptz", "required": true }
+      },
+      "rls_enabled": false
+    },
+    "product_images": {
+      "exists": true,
+      "primary_key": "id (uuid)",
+      "columns": {
+        "id": { "type": "uuid", "required": true, "primary_key": true },
+        "product_uid": { "type": "text", "required": true, "foreign_key": "products(uid)" },
+        "image_path": { "type": "text", "required": true },
+        "type": { "type": "text", "required": false },
+        "display_order": { "type": "integer", "required": false, "default": 0 },
+        "alt_text": { "type": "text", "required": false },
+        "created_at": { "type": "timestamptz", "required": true }
+      },
+      "rls_enabled": false
+    },
+    "categories": {
+      "exists": true,
+      "primary_key": "id (uuid)",
+      "columns": {
+        "id": { "type": "uuid", "required": true, "primary_key": true },
+        "name": { "type": "text", "required": true },
+        "slug": { "type": "text", "required": true, "unique": true },
+        "parent_id": { "type": "uuid", "required": false, "foreign_key": "categories(id)" },
+        "description": { "type": "text", "required": false },
+        "is_featured": { "type": "boolean", "required": false, "default": false },
+        "hero_image_path": { "type": "text", "required": false },
+        "tile_image_path": { "type": "text", "required": false },
+        "banner_image_path": { "type": "text", "required": false },
+        "sort_order": { "type": "integer", "required": false, "default": 0 },
+        "created_at": { "type": "timestamptz", "required": true },
+        "updated_at": { "type": "timestamptz", "required": true }
+      },
+      "rls_enabled": false
+    },
+    "homepage_sections": {
+      "exists": true,
+      "primary_key": "id (uuid)",
+      "columns": {
+        "id": { "type": "uuid", "required": true, "primary_key": true },
+        "title": { "type": "text", "required": true },
+        "type": { "type": "text", "required": true },
+        "sort_order": { "type": "text", "required": false },
+        "order_index": { "type": "integer", "required": true },
+        "visible": { "type": "boolean", "required": true },
+        "status": { "type": "text", "required": true },
+        "created_at": { "type": "timestamptz", "required": true },
+        "updated_at": { "type": "timestamptz", "required": true }
+      },
+      "rls_enabled": false
+    },
+    "homepage_section_products": {
+      "exists": true,
+      "primary_key": "id (uuid)",
+      "columns": {
+        "id": { "type": "uuid", "required": true, "primary_key": true },
+        "section_id": { "type": "uuid", "required": true, "foreign_key": "homepage_sections(id)" },
+        "product_uid": { "type": "text", "required": true, "foreign_key": "products(uid)" },
+        "order_index": { "type": "integer", "required": true }
+      },
+      "rls_enabled": false
+    },
+    "homepage_categories": {
+      "exists": true,
+      "primary_key": "id (uuid)",
+      "columns": {
+        "id": { "type": "uuid", "required": true, "primary_key": true },
+        "category_id": { "type": "uuid", "required": true, "foreign_key": "categories(id)" },
+        "order_index": { "type": "integer", "required": true },
+        "visible": { "type": "boolean", "required": true },
+        "created_at": { "type": "timestamptz", "required": true },
+        "updated_at": { "type": "timestamptz", "required": true }
+      },
+      "rls_enabled": false
+    },
+    "homepage_banners": {
+      "exists": true,
+      "primary_key": "id (uuid)",
+      "columns": {
+        "id": { "type": "uuid", "required": true, "primary_key": true },
+        "title": { "type": "text", "required": false },
+        "image_path": { "type": "text", "required": true },
+        "link_url": { "type": "text", "required": false },
+        "order_index": { "type": "integer", "required": true },
+        "visible": { "type": "boolean", "required": true },
+        "created_at": { "type": "timestamptz", "required": true },
+        "updated_at": { "type": "timestamptz", "required": true }
+      },
+      "rls_enabled": false
+    },
+    "customers": {
+      "exists": true,
+      "primary_key": "id (uuid)",
+      "columns": {
+        "id": { "type": "uuid", "required": true, "primary_key": true },
+        "auth_uid": { "type": "uuid", "required": false, "unique": true },
+        "email": { "type": "text", "required": true },
+        "full_name": { "type": "text", "required": false },
+        "phone": { "type": "text", "required": false },
+        "created_at": { "type": "timestamptz", "required": true },
+        "updated_at": { "type": "timestamptz", "required": true }
+      },
+      "rls_enabled": true
+    },
+    "users": {
+      "exists": true,
+      "primary_key": "id (uuid)",
+      "columns": {
+        "id": { "type": "uuid", "required": true, "primary_key": true },
+        "auth_uid": { "type": "uuid", "required": false, "unique": true },
+        "email": { "type": "text", "required": true },
+        "full_name": { "type": "text", "required": false },
+        "phone": { "type": "text", "required": false },
+        "role": { "type": "z_role_type", "required": false, "default": "customer" },
+        "is_active": { "type": "boolean", "required": false, "default": true },
+        "metadata": { "type": "jsonb", "required": false, "default": "{}" },
+        "created_at": { "type": "timestamptz", "required": true },
+        "updated_at": { "type": "timestamptz", "required": true }
+      },
+      "rls_enabled": false
+    },
+    "homepage_sale_strips": {
+      "exists": true,
+      "primary_key": "id (uuid)",
+      "columns": {
+        "id": { "type": "uuid", "required": true, "primary_key": true },
+        "text": { "type": "text", "required": true },
+        "link_url": { "type": "text", "required": false },
+        "visible": { "type": "boolean", "required": true, "default": true },
+        "order_index": { "type": "integer", "required": true },
+        "created_at": { "type": "timestamptz", "required": true },
+        "updated_at": { "type": "timestamptz", "required": true }
+      },
+      "rls_enabled": false
+    },
+    "import_runs": {
+      "exists": false,
+      "notes": "Table does not exist - migration required for idempotency tracking"
+    },
+    "audit_logs": {
+      "exists": true,
+      "primary_key": "id (uuid)",
+      "columns": {
+        "id": { "type": "uuid", "required": true, "primary_key": true },
+        "actor_id": { "type": "uuid", "required": false },
+        "event": { "type": "text", "required": true },
+        "details": { "type": "jsonb", "required": false, "default": "{}" },
+        "created_at": { "type": "timestamptz", "required": true }
+      },
+      "rls_enabled": false
+    }
+  },
+  "blockers": [
+    {
+      "table": "products",
+      "issue": "Missing sort_order column",
+      "impact": "Reorder tool requires this column",
+      "migration_required": true
+    },
+    {
+      "table": "import_runs",
+      "issue": "Table does not exist",
+      "impact": "Cannot track import batches for idempotency",
+      "migration_required": true
+    }
+  ],
+  "summary": {
+    "total_tables_scanned": 13,
+    "tables_missing": 1,
+    "columns_missing": 1,
+    "migrations_required": 2
+  }
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

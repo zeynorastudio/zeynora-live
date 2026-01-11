@@ -1,0 +1,107 @@
+/* Product Card System - Warm Editorial Styles */
+
+/* Hover zoom effect (desktop only) */
+.hover-zoom {
+  transition: transform 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+  will-change: transform;
+}
+
+@media (min-width: 768px) {
+  .hover-zoom:hover {
+    transform: scale(1.1);
+  }
+}
+
+/* Warm bronze-tinted shadows */
+.shadow-warm-xs {
+  box-shadow: 0 1px 3px rgba(205, 127, 50, 0.12), 0 1px 2px rgba(0, 0, 0, 0.06);
+}
+
+.shadow-warm-sm {
+  box-shadow: 0 2px 6px rgba(205, 127, 50, 0.15), 0 1px 3px rgba(0, 0, 0, 0.08);
+}
+
+/* Color dot size classes */
+.color-dot {
+  width: 0.75rem;
+  height: 0.75rem;
+  border-radius: 50%;
+  border: 1px solid rgba(192, 192, 192, 0.5);
+  flex-shrink: 0;
+}
+
+.color-dot-sm {
+  width: 0.625rem;
+  height: 0.625rem;
+}
+
+.color-dot-lg {
+  width: 0.875rem;
+  height: 0.875rem;
+}
+
+/* Editorial typography adjustments */
+.product-card-title {
+  font-family: Georgia, serif;
+  font-weight: 400;
+  line-height: 1.3;
+}
+
+.product-card-price {
+  font-family: Georgia, serif;
+  font-weight: 400;
+  color: #D4AF37;
+}
+
+/* Mobile-first spacing helpers */
+.product-card-spacing {
+  padding: 1rem;
+}
+
+@media (min-width: 768px) {
+  .product-card-spacing {
+    padding: 1.25rem;
+  }
+}
+
+/* Warm offwhite background tint - use Tailwind cream color instead */
+
+/* Ensure smooth transitions */
+.product-card-transition {
+  transition: all 0.3s ease;
+}
+
+/* Hide scrollbar utility */
+.scrollbar-hide {
+  -ms-overflow-style: none; /* IE and Edge */
+  scrollbar-width: none; /* Firefox */
+}
+
+.scrollbar-hide::-webkit-scrollbar {
+  display: none; /* Chrome, Safari, Opera */
+}
+
+/* Filter spacing helpers */
+.filter-section-spacing {
+  padding: 1.5rem 0;
+}
+
+.filter-checkbox-group {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+/* Bronze checkbox accent styling */
+input[type="checkbox"]:checked {
+  background-color: #CD7F32;
+  border-color: #CD7F32;
+  accent-color: #CD7F32;
+}
+
+input[type="checkbox"]:focus {
+  outline: none;
+  ring: 2px;
+  ring-color: #CD7F32;
+}
+

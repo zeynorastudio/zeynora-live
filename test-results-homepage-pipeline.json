@@ -1,0 +1,198 @@
+{
+  "results": [
+    {
+      "step": "1.1",
+      "status": "SKIP",
+      "details": "Cannot verify policies directly (RPC not available), checking via buckets"
+    },
+    {
+      "step": "2.1",
+      "status": "PASS",
+      "details": "Found 6 buckets",
+      "data": {
+        "buckets": [
+          "products",
+          "banners",
+          "categories",
+          "brand",
+          "content",
+          "video"
+        ]
+      }
+    },
+    {
+      "step": "2.2",
+      "status": "PASS",
+      "details": "Bucket 'banners': EXISTS"
+    },
+    {
+      "step": "2.2",
+      "status": "PASS",
+      "details": "Bucket 'products': EXISTS"
+    },
+    {
+      "step": "2.2",
+      "status": "PASS",
+      "details": "Bucket 'categories': EXISTS"
+    },
+    {
+      "step": "2.2",
+      "status": "PASS",
+      "details": "Bucket 'video': EXISTS"
+    },
+    {
+      "step": "2.2",
+      "status": "PASS",
+      "details": "Bucket 'content': EXISTS"
+    },
+    {
+      "step": "2.2",
+      "status": "PASS",
+      "details": "Bucket 'brand': EXISTS"
+    },
+    {
+      "step": "3.1",
+      "status": "PASS",
+      "details": "banners/homepage: 1 objects",
+      "data": {
+        "sample": [
+          "hero"
+        ]
+      }
+    },
+    {
+      "step": "3.1",
+      "status": "PASS",
+      "details": "products/homepage: 0 objects",
+      "data": {
+        "sample": []
+      }
+    },
+    {
+      "step": "3.1",
+      "status": "PASS",
+      "details": "categories/homepage: 0 objects",
+      "data": {
+        "sample": []
+      }
+    },
+    {
+      "step": "4.1",
+      "status": "PASS",
+      "details": "Found 2 hero rows"
+    },
+    {
+      "step": "4.2",
+      "status": "PASS",
+      "details": "Hero 175c2752-376f-4ed9-afd9-f100ac11a23b (published): desktop_image exists=true",
+      "data": {
+        "path": "homepage/hero/1764540549953-0002-back-jpg"
+      }
+    },
+    {
+      "step": "4.2",
+      "status": "PASS",
+      "details": "Hero 6f19c0c5-14e9-4b64-9cfc-dd30b71ac8a0 (draft): desktop_image exists=true",
+      "data": {
+        "path": "homepage/hero/1764540549953-0002-back-jpg"
+      }
+    },
+    {
+      "step": "4.3",
+      "status": "PASS",
+      "details": "Found 0 banner rows"
+    },
+    {
+      "step": "4.4",
+      "status": "PASS",
+      "details": "Found 0 category rows"
+    },
+    {
+      "step": "5.1",
+      "status": "PASS",
+      "details": "getPublicUrl generates correct CDN URL",
+      "data": {
+        "input": "homepage/hero/test-image.jpg",
+        "output": "https://ubwutlzwywrpncnewsyy.supabase.co/storage/v1/object/public/banners/homepage/hero/test-image.jpg",
+        "expectedPattern": "https:\\/\\/ubwutlzwywrpncnewsyy.supabase.co\\/storage\\/v1\\/object\\/public\\/banners\\/"
+      }
+    },
+    {
+      "step": "5.2",
+      "status": "PASS",
+      "details": "getPublicUrl does NOT use browser client (SSR-safe)"
+    },
+    {
+      "step": "6.1",
+      "status": "PASS",
+      "details": "Upload succeeded",
+      "data": {
+        "path": "homepage/hero/test-image-1764588690130.jpg"
+      }
+    },
+    {
+      "step": "6.2",
+      "status": "PASS",
+      "details": "Generated public URL",
+      "data": {
+        "url": "https://ubwutlzwywrpncnewsyy.supabase.co/storage/v1/object/public/banners/homepage/hero/test-image-1764588690130.jpg"
+      }
+    },
+    {
+      "step": "6.3",
+      "status": "PASS",
+      "details": "Uploaded object exists in storage: true",
+      "data": {
+        "folder": "homepage/hero",
+        "fileName": "test-image-1764588690130.jpg"
+      }
+    },
+    {
+      "step": "6.4",
+      "status": "PASS",
+      "details": "Test image deleted successfully"
+    },
+    {
+      "step": "7.1",
+      "status": "PASS",
+      "details": "Found draft hero row",
+      "data": {
+        "id": "6f19c0c5-14e9-4b64-9cfc-dd30b71ac8a0",
+        "desktop_image": "homepage/hero/1764540549953-0002-back-jpg",
+        "mobile_image": "-mobile.jpg"
+      }
+    },
+    {
+      "step": "7.2",
+      "status": "PASS",
+      "details": "Draft hero image file exists: true",
+      "data": {
+        "path": "homepage/hero/1764540549953-0002-back-jpg"
+      }
+    },
+    {
+      "step": "7.3",
+      "status": "PASS",
+      "details": "Published hero row exists",
+      "data": {
+        "id": "175c2752-376f-4ed9-afd9-f100ac11a23b",
+        "desktop_image": "homepage/hero/1764540549953-0002-back-jpg",
+        "mobile_image": "-mobile.jpg"
+      }
+    },
+    {
+      "step": "7.4",
+      "status": "PASS",
+      "details": "Published hero image file exists: true",
+      "data": {
+        "path": "homepage/hero/1764540549953-0002-back-jpg"
+      }
+    }
+  ],
+  "summary": {
+    "passCount": 25,
+    "failCount": 0,
+    "blockCount": 0,
+    "skipCount": 1
+  }
+}

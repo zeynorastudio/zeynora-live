@@ -1,0 +1,432 @@
+{
+  "uid_state": {
+    "highest_existing_uid": "UNKNOWN - Database scan required",
+    "increment_strategy": "scan-table",
+    "recommendation_sql": null
+  },
+  "product_images_schema": {
+    "product_images_columns": [
+      {
+        "name": "id",
+        "type": "uuid PRIMARY KEY"
+      },
+      {
+        "name": "product_uid",
+        "type": "text REFERENCES products(uid)"
+      },
+      {
+        "name": "image_path",
+        "type": "text NOT NULL"
+      },
+      {
+        "name": "type",
+        "type": "text"
+      },
+      {
+        "name": "display_order",
+        "type": "integer DEFAULT 0"
+      },
+      {
+        "name": "alt_text",
+        "type": "text"
+      },
+      {
+        "name": "variant_sku",
+        "type": "text"
+      },
+      {
+        "name": "created_at",
+        "type": "timestamptz NOT NULL DEFAULT now()"
+      }
+    ],
+    "has_variant_sku": true,
+    "has_display_order": true,
+    "missing_columns_sql": null,
+    "storage_bucket_policies": "supabase/migrations/20251201000100_storage_policies_all_buckets.sql"
+  },
+  "media_manager": {
+    "files_found": [
+      {
+        "path": "app/(admin)/admin/super/media/page.tsx",
+        "exists": true,
+        "ts_errors": [],
+        "rsc_boundaries": "correct"
+      },
+      {
+        "path": "app/(admin)/admin/super/media/MediaManagerClient.tsx",
+        "exists": true,
+        "ts_errors": [],
+        "rsc_boundaries": "correct"
+      },
+      {
+        "path": "app/(admin)/admin/super/media/actions.ts",
+        "exists": true,
+        "ts_errors": [],
+        "rsc_boundaries": "correct"
+      },
+      {
+        "path": "lib/media/index.ts",
+        "exists": true,
+        "ts_errors": [],
+        "rsc_boundaries": "correct"
+      },
+      {
+        "path": "lib/utils/images.ts",
+        "exists": true,
+        "ts_errors": [],
+        "rsc_boundaries": "correct"
+      }
+    ],
+    "behavior_check": {
+      "groups_by_color": "implemented",
+      "upload_to_products_uid": "implemented",
+      "drag_reorder": "implemented",
+      "setMain": "implemented",
+      "assign_variant_sku": "implemented",
+      "file_locations": [
+        "app/(admin)/admin/super/media/MediaManagerClient.tsx:100-300",
+        "app/(admin)/admin/super/media/actions.ts:1-222",
+        "lib/media/index.ts:33-262"
+      ]
+    },
+    "dependencies_needed": []
+  },
+  "add_product_flow": {
+    "files_found": [
+      {
+        "path": "app/(admin)/admin/super/products/add/page.tsx",
+        "exists": true
+      },
+      {
+        "path": "app/(admin)/admin/super/products/add/AddProductClient.tsx",
+        "exists": true
+      },
+      {
+        "path": "app/(admin)/admin/super/products/add/actions.ts",
+        "exists": true
+      },
+      {
+        "path": "lib/products/index.ts",
+        "exists": true
+      },
+      {
+        "path": "lib/validators/product.ts",
+        "exists": false,
+        "note": "Validation is done inline in AddProductClient.tsx"
+      }
+    ],
+    "uid_generation_impl": {
+      "function": "generateNextZYNUID",
+      "file_path": "lib/products/index.ts:12-40",
+      "implementation_details": "Scans products table for max ZYN-XXXX UID using LIKE query, increments and zero-pads to 4 digits. Uses scan-table strategy.",
+      "increments_from_last": true
+    },
+    "slug_generation": {
+      "exists": true,
+      "location": "lib/products/index.ts:180-196",
+      "implementation": "Auto-generates from product name using slugify, ensures uniqueness by appending counter"
+    },
+    "enum_sources": {
+      "occasion": {
+        "source": "Postgres enum z_occasion",
+        "loaded_from": "lib/importer/helpers.ts via getEnumValues RPC",
+        "migration_exists": true
+      },
+      "season": {
+        "source": "Postgres enum z_season",
+        "loaded_from": "lib/importer/helpers.ts via getEnumValues RPC",
+        "migration_exists": true
+      },
+      "categories": {
+        "source": "DB table categories",
+        "loaded_from": "app/(admin)/admin/super/products/add/page.tsx:11-40"
+      }
+    },
+    "variant_creation_logic": {
+      "creates_color_size_matrix": true,
+      "sku_pattern": "<UID>-<COLORSHORT>-<SIZE>",
+      "per_color_per_size_stock": true,
+      "file_location": "lib/products/index.ts:263-322"
+    }
+  },
+  "products_page_and_reorder": {
+    "files_found": [
+      {
+        "path": "app/(admin)/admin/super/products/page.tsx",
+        "exists": true
+      },
+      {
+        "path": "app/(admin)/admin/super/products/actions.ts",
+        "exists": true
+      },
+      {
+        "path": "lib/products/list.ts",
+        "exists": true
+      }
+    ],
+    "reorder_persistence": {
+      "updates_sort_order": true,
+      "revalidates_homepage": true,
+      "db_field": "products.sort_order",
+      "revalidate_paths": [
+        "/admin/super/products",
+        "/",
+        "/collections"
+      ],
+      "file_location": "app/(admin)/admin/super/products/actions.ts:13-57"
+    },
+    "inline_editable_price": {
+      "exists": false,
+      "note": "Price editing available in variant table (app/(admin)/admin/variants/components/VariantTable.tsx:323-332) but not on products list page",
+      "files_to_update": [
+        "app/(admin)/admin/super/products/ProductsListClient.tsx - Add inline edit UI",
+        "app/(admin)/admin/super/products/actions.ts - Add updatePriceAction",
+        "lib/products/index.ts - Add updateProductPrice helper"
+      ]
+    }
+  },
+  "importer": {
+    "canonical_engine": {
+      "file": "lib/importer/index.ts",
+      "is_canonical": true,
+      "other_files": [
+        "lib/importer/parser.ts",
+        "lib/importer/validation.ts",
+        "lib/importer/normalizers.ts",
+        "lib/importer/merger.ts",
+        "lib/importer/types.ts",
+        "lib/importer/errors.ts",
+        "lib/importer/helpers.ts"
+      ],
+      "deprecated_or_orphaned": []
+    },
+    "deterministic_image_merge": {
+      "implemented": true,
+      "logic": "Uses first non-empty Images_JSON per SKU. Function mergeVariantImagesBySKU processes variant rows, skips SKUs already processed, uses first row with images.",
+      "file_location": "lib/importer/index.ts:101-120",
+      "deterministic": true
+    },
+    "preview_behavior": {
+      "returns_counts": true,
+      "returns_skipped_rows": true,
+      "returns_reasons": true,
+      "silent_skip_behavior": false,
+      "file_location": "lib/importer/index.ts:133-313"
+    }
+  },
+  "homepage_builder_integration": {
+    "files_found": [
+      {
+        "path": "app/(admin)/admin/super/homepage/page.tsx",
+        "exists": true
+      },
+      {
+        "path": "app/(admin)/admin/super/homepage/hero/HeroManagerClient.tsx",
+        "exists": true
+      },
+      {
+        "path": "app/(admin)/admin/super/homepage/sections/SectionsManagerClient.tsx",
+        "exists": true
+      }
+    ],
+    "linking_model": {
+      "hero_table": "homepage_hero - No direct product linking, uses CTA URLs",
+      "sections_table": "homepage_sections - source_type: automatic/manual",
+      "product_linking_table": "homepage_section_products - join table with section_id, product_id (text references products.uid), order_index",
+      "automatic_sections": "Query products based on source_meta rules",
+      "manual_sections": "Use homepage_section_products join table",
+      "migration_file": "supabase/migrations/20251201000200_homepage_builder_tables_safe.sql"
+    }
+  },
+  "users_and_wishlist": {
+    "users_table": {
+      "path": "types/supabase.ts (Database interface)",
+      "shape": "id (uuid), auth_uid (text), role (text), full_name, email, phone, etc.",
+      "wishlist_mapping": "wishlist_items table: user_id → users.id, product_uid → products.uid, variant_sku (optional)"
+    },
+    "wishlist_integration": {
+      "endpoints": [
+        "app/api/wishlist/actions.ts - toggleWishlistAction, fetchWishlistAction"
+      ],
+      "db_joins": "wishlist_items JOIN users ON user_id = users.id JOIN customers ON users.auth_uid = customers.auth_uid",
+      "rls_rules": "RLS enabled, policies check auth.uid() matches customers.auth_uid via users join",
+      "migration_file": "phase_2_12_wishlist.sql, supabase/migrations/20250120000017_rls_wishlist_items.sql"
+    }
+  },
+  "sendgrid_shiprocket_refs": {
+    "sendgrid": {
+      "files": [
+        "app/api/notifications/shipping/route.ts",
+        "package.json (@sendgrid/mail dependency)"
+      ],
+      "status": "implemented",
+      "env_vars": ["SENDGRID_API_KEY", "SENDGRID_FROM_EMAIL"],
+      "note": "Shipping notification emails via SendGrid API"
+    },
+    "shiprocket": {
+      "files": [
+        "lib/shipping/shiprocket-client.ts",
+        "lib/shipping/fulfillment.ts",
+        "app/api/shipping/shiprocket/create-order/route.ts",
+        "app/api/webhooks/shiprocket/route.ts",
+        "app/api/shipping/webhook/route.ts"
+      ],
+      "status": "implemented",
+      "env_vars": [
+        "SHIPROCKET_BASE_URL",
+        "SHIPROCKET_EMAIL",
+        "SHIPROCKET_PASSWORD",
+        "SHIPROCKET_API_KEY",
+        "SHIPROCKET_API_SECRET",
+        "SHIPROCKET_WEBHOOK_SECRET"
+      ],
+      "features": [
+        "Order creation",
+        "AWB generation",
+        "Webhook handling",
+        "Tracking URL generation",
+        "Serviceability check"
+      ],
+      "db_fields": [
+        "orders.shiprocket_shipment_id",
+        "orders.metadata.shiprocket_response"
+      ]
+    }
+  },
+  "build_and_typecheck": {
+    "tsc_output": "See tsc_errors_full.txt - Multiple TypeScript errors found, primarily type inference issues with Supabase client ('never' types), missing type definitions for some tables",
+    "next_build_output": "Not run - Would require npm install and build. TypeScript errors would block build unless ignoreBuildErrors is true (which it is in next.config.ts)",
+    "errors_fixed_by_scan": [],
+    "note": "next.config.ts has ignoreBuildErrors: true and ignoreDuringBuilds: true for ESLint"
+  },
+  "migrations_to_apply": [
+    {
+      "path": "supabase/migrations/20250121000002_add_variant_sku_to_product_images.sql",
+      "filename": "20250121000002_add_variant_sku_to_product_images.sql",
+      "sql": "-- Migration: Add variant_sku column to product_images table\n-- Purpose: Allow assigning images to specific product variants\n-- Idempotent: Yes (uses IF NOT EXISTS)\n\n-- Add variant_sku column if it doesn't exist\nDO $$\nBEGIN\n  IF NOT EXISTS (\n    SELECT 1 FROM information_schema.columns \n    WHERE table_name = 'product_images' AND column_name = 'variant_sku'\n  ) THEN\n    ALTER TABLE product_images ADD COLUMN variant_sku text;\n    \n    -- Add index for faster variant-specific queries\n    CREATE INDEX IF NOT EXISTS idx_product_images_variant_sku \n    ON product_images(variant_sku);\n    \n    COMMENT ON COLUMN product_images.variant_sku IS \n    'Optional: SKU of the product variant this image belongs to. NULL means product-level image.';\n  END IF;\nEND $$;",
+      "justification": "Already exists but may not be applied. Adds variant_sku column to support variant-specific image assignments in media manager.",
+      "impact": "Low risk - adds nullable column, no data loss"
+    },
+    {
+      "path": "supabase/migrations/20251201000100_storage_policies_all_buckets.sql",
+      "filename": "20251201000100_storage_policies_all_buckets.sql",
+      "justification": "Ensures products bucket has public read access. Migration file exists and appears comprehensive.",
+      "impact": "Low risk - adds policies, doesn't modify data"
+    }
+  ],
+  "actionable_todos": [
+    {
+      "priority": "High",
+      "task": "Add inline price editing to products list page",
+      "files": [
+        "app/(admin)/admin/super/products/ProductsListClient.tsx",
+        "app/(admin)/admin/super/products/actions.ts"
+      ],
+      "description": "Add inline edit UI for price field in products table, create updatePriceAction server action",
+      "estimated_hours": 4
+    },
+    {
+      "priority": "High",
+      "task": "Fix TypeScript errors in Supabase type definitions",
+      "files": [
+        "types/supabase.ts",
+        "All files with 'never' type errors"
+      ],
+      "description": "Update Database interface to include all table types properly. Fix type assertions causing 'never' types.",
+      "estimated_hours": 8
+    },
+    {
+      "priority": "Medium",
+      "task": "Verify and apply variant_sku migration if not applied",
+      "files": [],
+      "description": "Check if variant_sku column exists in product_images table, apply migration if missing",
+      "estimated_hours": 0.5
+    },
+    {
+      "priority": "Medium",
+      "task": "Add id_counters table for atomic UID generation (optional optimization)",
+      "files": [
+        "Create new migration file"
+      ],
+      "description": "Replace scan-table UID generation with atomic counter table to prevent race conditions in high-concurrency scenarios",
+      "estimated_hours": 3
+    },
+    {
+      "priority": "Low",
+      "task": "Improve importer preview error reporting UI",
+      "files": [
+        "app/(admin)/admin/import/components/CsvUploadForm.tsx"
+      ],
+      "description": "Enhance preview UI to show detailed error messages and skipped row reasons",
+      "estimated_hours": 4
+    },
+    {
+      "priority": "Low",
+      "task": "Add product reorder drag indicator improvements",
+      "files": [
+        "app/(admin)/admin/super/products/ProductsListClient.tsx"
+      ],
+      "description": "Add visual feedback during drag, improve accessibility",
+      "estimated_hours": 2
+    }
+  ],
+  "final_verification_steps": [
+    {
+      "step": 1,
+      "description": "Product Create (multi-color, multi-size)",
+      "actions": [
+        "Navigate to /admin/super/products/add",
+        "Fill form with name, price, select category",
+        "Enter colors: 'Red, Blue, Green'",
+        "Enter sizes with stock: 'M-9,L-4,XL-12'",
+        "Submit and verify product created with UID ZYN-XXXX",
+        "Verify variants created: Red-M, Red-L, Red-XL, Blue-M, Blue-L, Blue-XL, Green-M, Green-L, Green-XL",
+        "Verify SKUs follow pattern: <UID>-<COLOR>-<SIZE>"
+      ]
+    },
+    {
+      "step": 2,
+      "description": "Media Manager per-color upload + set main + reorder",
+      "actions": [
+        "Navigate to /admin/super/media",
+        "Search for product created in step 1",
+        "Click 'Manage Images'",
+        "Upload multiple images (at least 3)",
+        "Verify images upload to products/{uid}/{filename} path",
+        "Group images by color (if variant_sku assigned)",
+        "Drag images to reorder, verify display_order updates",
+        "Click 'Set as Main' on an image, verify products.main_image_path updates",
+        "Assign image to variant SKU using dropdown",
+        "Refresh page and verify changes persist"
+      ]
+    },
+    {
+      "step": 3,
+      "description": "All-products page inline price/sale edit + reorder → homepage reflect",
+      "actions": [
+        "Navigate to /admin/super/products",
+        "Drag products to reorder",
+        "Click 'Save Order'",
+        "Verify sort_order column updates in database",
+        "Check homepage (/) and verify product order reflects changes",
+        "Note: Inline price edit not yet implemented - verify variant price edit works in variants table"
+      ]
+    },
+    {
+      "step": 4,
+      "description": "Importer dry-run and import with skipped-row reporting",
+      "actions": [
+        "Navigate to /admin/import (or import page)",
+        "Upload Products CSV with some rows missing UID",
+        "Upload Variants CSV with duplicate SKUs",
+        "Run preview (dry-run)",
+        "Verify preview shows: products to create count, variants to create count, skipped rows with reasons",
+        "Check for warnings about existing products if updateExisting=false",
+        "Run actual import",
+        "Verify summary includes skipped_rows_count and warnings array",
+        "Check that UIDs were auto-generated for rows missing UID",
+        "Verify variant images merged deterministically (first non-empty per SKU)"
+      ]
+    }
+  ]
+}

@@ -1,0 +1,310 @@
+﻿
+app/api/fulfillment/on-payment/route.ts(127,44): error TS2339: Property 
+'metadata' does not exist on type 'never'.
+app/api/fulfillment/on-payment/route.ts(133,31): error TS2339: Property 
+'shipping_status' does not exist on type 'never'.
+app/api/fulfillment/on-payment/route.ts(138,36): error TS2339: Property 
+'shiprocket_shipment_id' does not exist on type 'never'.
+app/api/homepage/publish/route.ts(39,51): error TS2769: No overload matches 
+this call.
+app/api/homepage/publish/route.ts(43,57): error TS2769: No overload matches 
+this call.
+app/api/homepage/publish/route.ts(47,54): error TS2769: No overload matches 
+this call.
+app/api/homepage/publish/route.ts(67,21): error TS2339: Property 
+'homepage_section_products' does not exist on type 'never'.
+app/api/homepage/publish/route.ts(68,43): error TS2339: Property 
+'homepage_section_products' does not exist on type 'never'.
+app/api/homepage/publish/route.ts(69,36): error TS2339: Property 'id' does not 
+exist on type 'never'.
+app/api/notifications/shipping/route.ts(48,20): error TS2339: Property 
+'user_id' does not exist on type 'never'.
+app/api/notifications/shipping/route.ts(59,27): error TS2339: Property 
+'user_id' does not exist on type 'never'.
+app/api/notifications/shipping/route.ts(62,20): error TS2339: Property 'email' 
+does not exist on type 'never'.
+app/api/notifications/shipping/route.ts(71,20): error TS2339: Property 'email' 
+does not exist on type 'never'.
+app/api/notifications/shipping/route.ts(72,30): error TS2339: Property 
+'order_number' does not exist on type 'never'.
+app/api/notifications/shipping/route.ts(95,37): error TS2339: Property 'email' 
+does not exist on type 'never'.
+app/api/orders/cancel/route.ts(50,15): error TS2339: Property 'user_id' does 
+not exist on type 'never'.
+app/api/orders/cancel/route.ts(50,38): error TS2339: Property 'id' does not 
+exist on type 'never'.
+app/api/orders/cancel/route.ts(55,15): error TS2339: Property 'payment_status' 
+does not exist on type 'never'.
+app/api/orders/cancel/route.ts(63,13): error TS2339: Property 
+'shipping_status' does not exist on type 'never'.
+app/api/orders/cancel/route.ts(64,13): error TS2339: Property 
+'shipping_status' does not exist on type 'never'.
+app/api/orders/cancel/route.ts(65,13): error TS2339: Property 
+'shipping_status' does not exist on type 'never'.
+app/api/orders/cancel/route.ts(66,13): error TS2339: Property 
+'shipping_status' does not exist on type 'never'.
+app/api/orders/cancel/route.ts(77,15): error TS2345: Argument of type '{ 
+payment_status: string; shipping_status: string; updated_at: string; }' is not 
+assignable to parameter of type 'never'.
+app/api/orders/cancel/route.ts(93,45): error TS2769: No overload matches this 
+call.
+app/api/orders/cancel/route.ts(99,29): error TS2339: Property 'order_number' 
+does not exist on type 'never'.
+app/api/orders/create/route.ts(67,19): error TS2339: Property 'stock' does not 
+exist on type 'never'.
+app/api/orders/create/route.ts(73,29): error TS2339: Property 'cost' does not 
+exist on type 'never'.
+app/api/orders/create/route.ts(77,23): error TS2339: Property 'cost' does not 
+exist on type 'never'.
+app/api/orders/create/route.ts(87,82): error TS2345: Argument of type '{ 
+sku_in: string; qty_in: number; }' is not assignable to parameter of type 
+'undefined'.
+app/api/orders/create/route.ts(97,58): error TS2345: Argument of type '{ 
+stock: number; }' is not assignable to parameter of type 'never'.
+app/api/orders/create/route.ts(97,75): error TS2339: Property 'stock' does not 
+exist on type 'never'.
+app/api/orders/create/route.ts(111,8): error TS2769: No overload matches this 
+call.
+app/api/orders/create/route.ts(135,25): error TS2339: Property 'id' does not 
+exist on type 'never'.
+app/api/orders/create/route.ts(142,49): error TS2769: No overload matches this 
+call.
+app/api/orders/create/route.ts(145,63): error TS2339: Property 'id' does not 
+exist on type 'never'.
+app/api/orders/return/route.ts(50,15): error TS2339: Property 'user_id' does 
+not exist on type 'never'.
+app/api/orders/return/route.ts(50,38): error TS2339: Property 'id' does not 
+exist on type 'never'.
+app/api/orders/return/route.ts(56,13): error TS2339: Property 'payment_status' 
+does not exist on type 'never'.
+app/api/orders/return/route.ts(57,13): error TS2339: Property 
+'shipping_status' does not exist on type 'never'.
+app/api/orders/return/route.ts(66,13): error TS2339: Property 
+'shipping_status' does not exist on type 'never'.
+app/api/orders/return/route.ts(67,13): error TS2339: Property 
+'shipping_status' does not exist on type 'never'.
+app/api/orders/return/route.ts(76,38): error TS2339: Property 'created_at' 
+does not exist on type 'never'.
+app/api/orders/return/route.ts(91,15): error TS2345: Argument of type '{ 
+shipping_status: string; updated_at: string; }' is not assignable to parameter 
+of type 'never'.
+app/api/orders/return/route.ts(106,45): error TS2769: No overload matches this 
+call.
+app/api/orders/return/route.ts(112,29): error TS2339: Property 'order_number' 
+does not exist on type 'never'.
+app/api/payments/create-order/route.ts(94,19): error TS2339: Property 'stock' 
+does not exist on type 'never'.
+app/api/payments/create-order/route.ts(94,45): error TS2339: Property 'stock' 
+does not exist on type 'never'.
+app/api/payments/create-order/route.ts(102,36): error TS2339: Property 'price' 
+does not exist on type 'never'.
+app/api/payments/create-order/route.ts(107,30): error TS2339: Property 
+'product_uid' does not exist on type 'never'.
+app/api/payments/create-order/route.ts(110,34): error TS2339: Property 'price' 
+does not exist on type 'never'.
+app/api/payments/create-order/route.ts(110,51): error TS2339: Property 'price' 
+does not exist on type 'never'.
+app/api/payments/create-order/route.ts(116,32): error TS2339: Property 'price' 
+does not exist on type 'never'.
+app/api/payments/create-order/route.ts(118,31): error TS2339: Property 'id' 
+does not exist on type 'never'.
+app/api/payments/create-order/route.ts(119,32): error TS2339: Property 'sku' 
+does not exist on type 'never'.
+app/api/payments/create-order/route.ts(120,32): error TS2339: Property 
+'product_uid' does not exist on type 'never'.
+app/api/payments/create-order/route.ts(122,26): error TS2339: Property 'price' 
+does not exist on type 'never'.
+app/api/payments/create-order/route.ts(127,31): error TS2339: Property 'id' 
+does not exist on type 'never'.
+app/api/payments/create-order/route.ts(128,32): error TS2339: Property 'sku' 
+does not exist on type 'never'.
+app/api/payments/create-order/route.ts(129,32): error TS2339: Property 
+'product_uid' does not exist on type 'never'.
+app/api/payments/create-order/route.ts(159,54): error TS2339: Property 'id' 
+does not exist on type 'never'.
+app/api/payments/create-order/route.ts(204,8): error TS2769: No overload 
+matches this call.
+app/api/payments/create-order/route.ts(206,30): error TS2339: Property 'id' 
+does not exist on type 'never'.
+app/api/payments/create-order/route.ts(264,29): error TS2339: Property 'id' 
+does not exist on type 'never'.
+app/api/payments/create-order/route.ts(270,63): error TS2339: Property 'id' 
+does not exist on type 'never'.
+app/api/payments/create-order/route.ts(279,35): error TS2339: Property 
+'payment_provider_response' does not exist on type 'never'.
+app/api/payments/create-order/route.ts(294,15): error TS2345: Argument of type 
+'any' is not assignable to parameter of type 'never'.
+app/api/payments/create-order/route.ts(295,23): error TS2339: Property 'id' 
+does not exist on type 'never'.
+app/api/payments/create-order/route.ts(305,25): error TS2339: Property 'id' 
+does not exist on type 'never'.
+app/api/payments/create-order/route.ts(316,17): error TS2769: No overload 
+matches this call.
+app/api/payments/create-order/route.ts(327,26): error TS2339: Property 'id' 
+does not exist on type 'never'.
+app/api/payments/razorpay/create-order/route.ts(69,19): error TS2339: Property 
+'stock' does not exist on type 'never'.
+app/api/payments/razorpay/create-order/route.ts(69,45): error TS2339: Property 
+'stock' does not exist on type 'never'.
+app/api/payments/razorpay/create-order/route.ts(77,36): error TS2339: Property 
+'price' does not exist on type 'never'.
+app/api/payments/razorpay/create-order/route.ts(83,30): error TS2339: Property 
+'product_uid' does not exist on type 'never'.
+app/api/payments/razorpay/create-order/route.ts(86,34): error TS2339: Property 
+'price' does not exist on type 'never'.
+app/api/payments/razorpay/create-order/route.ts(86,51): error TS2339: Property 
+'price' does not exist on type 'never'.
+app/api/payments/razorpay/create-order/route.ts(92,32): error TS2339: Property 
+'price' does not exist on type 'never'.
+app/api/payments/razorpay/create-order/route.ts(98,29): error TS2339: Property 
+'id' does not exist on type 'never'.
+app/api/payments/razorpay/create-order/route.ts(99,30): error TS2339: Property 
+'sku' does not exist on type 'never'.
+app/api/payments/razorpay/create-order/route.ts(100,30): error TS2339: 
+Property 'product_uid' does not exist on type 'never'.
+app/api/payments/razorpay/create-order/route.ts(143,8): error TS2769: No 
+overload matches this call.
+app/api/payments/razorpay/create-order/route.ts(177,25): error TS2339: 
+Property 'id' does not exist on type 'never'.
+app/api/payments/razorpay/create-order/route.ts(188,17): error TS2769: No 
+overload matches this call.
+app/api/payments/razorpay/verify/route.ts(76,26): error TS2339: Property 
+'payment_provider_response' does not exist on type 'never'.
+app/api/payments/razorpay/verify/route.ts(83,61): error TS2339: Property 
+'message' does not exist on type 'never'.
+app/api/payments/razorpay/verify/route.ts(96,15): error TS2339: Property 
+'payment_status' does not exist on type 'never'.
+app/api/payments/razorpay/verify/route.ts(105,14): error TS2339: Property 
+'payment_provider_response' does not exist on type 'never'.
+app/api/payments/razorpay/verify/route.ts(110,15): error TS2345: Argument of 
+type '{ payment_status: string; payment_provider_response: Record<string, 
+any>; updated_at: string; }' is not assignable to parameter of type 'never'.
+app/api/payments/razorpay/verify/route.ts(115,23): error TS2339: Property 'id' 
+does not exist on type 'never'.
+app/api/payments/retry/route.ts(39,33): error TS2339: Property 'id' does not 
+exist on type 'never'.
+app/api/payments/retry/route.ts(64,14): error TS2339: Property 
+'payment_provider_response' does not exist on type 'never'.
+app/api/payments/retry/route.ts(74,43): error TS2769: No overload matches this 
+call.
+app/api/payments/retry/route.ts(75,25): error TS2339: Property 'id' does not 
+exist on type 'never'.
+app/api/payments/retry/route.ts(90,25): error TS2339: Property 'id' does not 
+exist on type 'never'.
+app/api/payments/retry/route.ts(91,29): error TS2339: Property 'order_number' 
+does not exist on type 'never'.
+app/api/payments/retry/route.ts(93,35): error TS2339: Property 'total_amount' 
+does not exist on type 'never'.
+app/api/payments/retry/route.ts(94,25): error TS2339: Property 'currency' does 
+not exist on type 'never'.
+app/api/payments/retry/route.ts(113,27): error TS2339: Property 'total_amount' 
+does not exist on type 'never'.
+app/api/payments/retry/route.ts(114,15): error TS2339: Property 'currency' 
+does not exist on type 'never'.
+app/api/payments/retry/route.ts(115,15): error TS2339: Property 'order_number' 
+does not exist on type 'never'.
+app/api/payments/retry/route.ts(117,27): error TS2339: Property 'id' does not 
+exist on type 'never'.
+app/api/payments/retry/route.ts(118,31): error TS2339: Property 'order_number' 
+does not exist on type 'never'.
+app/api/payments/retry/route.ts(143,15): error TS2345: Argument of type '{ 
+payment_provider_response: { [x: string]: any; }; updated_at: string; }' is 
+not assignable to parameter of type 'never'.
+app/api/payments/retry/route.ts(147,23): error TS2339: Property 'id' does not 
+exist on type 'never'.
+app/api/payments/retry/route.ts(158,41): error TS2769: No overload matches 
+this call.
+app/api/payments/retry/route.ts(159,23): error TS2339: Property 'id' does not 
+exist on type 'never'.
+app/api/payments/retry/route.ts(176,23): error TS2339: Property 'id' does not 
+exist on type 'never'.
+app/api/payments/retry/route.ts(177,27): error TS2339: Property 'order_number' 
+does not exist on type 'never'.
+app/api/payments/retry/route.ts(179,33): error TS2339: Property 'total_amount' 
+does not exist on type 'never'.
+app/api/payments/retry/route.ts(180,23): error TS2339: Property 'currency' 
+does not exist on type 'never'.
+app/api/payments/status/route.ts(42,33): error TS2339: Property 'id' does not 
+exist on type 'never'.
+app/api/payments/status/route.ts(65,14): error TS2339: Property 
+'payment_provider_response' does not exist on type 'never'.
+app/api/payments/status/route.ts(73,13): error TS2339: Property 
+'payment_status' does not exist on type 'never'.
+app/api/payments/status/route.ts(74,13): error TS2339: Property 
+'payment_status' does not exist on type 'never'.
+app/api/payments/status/route.ts(80,29): error TS2339: Property 'id' does not 
+exist on type 'never'.
+app/api/payments/status/route.ts(86,23): error TS2339: Property 'id' does not 
+exist on type 'never'.
+app/api/payments/status/route.ts(87,27): error TS2339: Property 'order_number' 
+does not exist on type 'never'.
+app/api/payments/status/route.ts(88,29): error TS2339: Property 
+'payment_status' does not exist on type 'never'.
+app/api/payments/status/route.ts(94,25): error TS2339: Property 'created_at' 
+does not exist on type 'never'.
+app/api/payments/status/route.ts(95,25): error TS2339: Property 'updated_at' 
+does not exist on type 'never'.
+app/api/payments/status/route.ts(97,17): error TS2339: Property 'id' does not 
+exist on type 'never'.
+app/api/payments/status/route.ts(98,21): error TS2339: Property 'status' does 
+not exist on type 'never'.
+app/api/payments/status/route.ts(99,25): error TS2339: Property 'created_at' 
+does not exist on type 'never'.
+app/api/payments/status/route.ts(100,22): error TS2339: Property 
+'provider_response' does not exist on type 'never'.
+app/api/payments/verify/route.ts(52,17): error TS2339: Property 
+'payment_status' does not exist on type 'never'.
+app/api/payments/verify/route.ts(59,37): error TS2339: Property 
+'payment_provider_response' does not exist on type 'never'.
+app/api/payments/verify/route.ts(70,17): error TS2339: Property 'user_id' does 
+not exist on type 'never'.
+app/api/payments/verify/route.ts(74,19): error TS2339: Property 'user_id' does 
+not exist on type 'never'.
+app/api/payments/verify/route.ts(76,19): error TS2339: Property 'id' does not 
+exist on type 'never'.
+app/api/payments/verify/route.ts(77,40): error TS2339: Property 'order_number' 
+does not exist on type 'never'.
+app/api/payments/verify/route.ts(77,62): error TS2339: Property 'id' does not 
+exist on type 'never'.
+app/api/payments/verify/route.ts(96,17): error TS2345: Argument of type '{ 
+payment_status: string; payment_provider_response: Record<string, any>; 
+updated_at: string; }' is not assignable to parameter of type 'never'.
+app/api/payments/verify/route.ts(101,25): error TS2339: Property 'id' does not 
+exist on type 'never'.
+app/api/payments/verify/route.ts(167,26): error TS2339: Property 
+'payment_provider_response' does not exist on type 'never'.
+app/api/payments/verify/route.ts(179,15): error TS2339: Property 
+'payment_status' does not exist on type 'never'.
+app/api/payments/verify/route.ts(188,14): error TS2339: Property 
+'payment_provider_response' does not exist on type 'never'.
+app/api/payments/verify/route.ts(195,37): error TS2339: Property 'user_id' 
+does not exist on type 'never'.
+app/api/payments/verify/route.ts(199,17): error TS2339: Property 'user_id' 
+does not exist on type 'never'.
+app/api/payments/verify/route.ts(201,17): error TS2339: Property 'id' does not 
+exist on type 'never'.
+app/api/payments/verify/route.ts(202,38): error TS2339: Property 
+'order_number' does not exist on type 'never'.
+app/api/payments/verify/route.ts(202,60): error TS2339: Property 'id' does not 
+exist on type 'never'.
+app/api/payments/verify/route.ts(217,29): error TS2339: Property 'id' does not 
+exist on type 'never'.
+app/api/payments/verify/route.ts(221,18): error TS2339: Property 'variant_id' 
+does not exist on type 'never'.
+app/api/payments/verify/route.ts(221,37): error TS2339: Property 'quantity' 
+does not exist on type 'never'.
+app/api/payments/verify/route.ts(223,77): error TS2345: Argument of type '{ 
+variant_id_in: any; qty_in: any; }' is not assignable to parameter of type 
+'undefined'.
+app/api/payments/verify/route.ts(224,33): error TS2339: Property 'variant_id' 
+does not exist on type 'never'.
+app/api/payments/verify/route.ts(225,26): error TS2339: Property 'quantity' 
+does not exist on type 'never'.
+app/api/payments/verify/route.ts(233,30): error TS2339: Property 'variant_id' 
+does not exist on type 'never'.
+app/api/payments/verify/route.ts(236,36): error TS2339: Property 'stock' does 
+not exist on type 'never'.
+app/api/payments/verify/route.ts(237,53): error TS2339: Property 'stock' does 
+not exist on type 'never'.
+
+

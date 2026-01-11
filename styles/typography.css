@@ -1,0 +1,60 @@
+/* Zeynora Typography Scale - Luxury Hybrid */
+
+.display-xxl {
+  font-size: 4.5rem;
+  line-height: 1.1;
+  letter-spacing: -0.02em;
+  font-weight: 300;
+}
+
+.display-xl {
+  font-size: 3.75rem;
+  line-height: 1.1;
+  letter-spacing: -0.02em;
+  font-weight: 300;
+}
+
+.display-lg {
+  font-size: 3rem;
+  line-height: 1.2;
+  letter-spacing: -0.01em;
+  font-weight: 300;
+}
+
+.display-md {
+  font-size: 2.25rem;
+  line-height: 1.2;
+  letter-spacing: -0.01em;
+  font-weight: 300;
+}
+
+.body-lg {
+  font-size: 1.125rem;
+  line-height: 1.6;
+  font-weight: 400;
+}
+
+.body-md {
+  font-size: 1rem;
+  line-height: 1.6;
+  font-weight: 400;
+}
+
+.body-sm {
+  font-size: 0.875rem;
+  line-height: 1.5;
+  font-weight: 400;
+}
+
+.serif-display {
+  font-family: Georgia, serif;
+  font-weight: 400;
+}
+
+.sans-base {
+  font-family: system-ui, -apple-system, sans-serif;
+}
+
+
+
+

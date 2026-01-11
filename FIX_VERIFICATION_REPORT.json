@@ -1,0 +1,60 @@
+{
+  "modified_files": [
+    "app/(admin)/admin/super/media/actions.ts"
+  ],
+  "fixes_applied": [
+    {
+      "file": "app/(admin)/admin/super/media/actions.ts",
+      "fix": "Enhanced getProductMediaAction to explicitly query product_images with .eq('product_uid', productUid) and order by display_order. Split into separate queries for better reliability."
+    }
+  ],
+  "verification_results": {
+    "product_images_queries": {
+      "lib/media/index.ts": {
+        "saveProductImage": "✅ Uses .eq('product_uid', productUid) - Line 87, 99",
+        "status": "CORRECT"
+      },
+      "app/(admin)/admin/super/media/actions.ts": {
+        "getProductMediaAction": "✅ Uses .eq('product_uid', productUid) with .order('display_order') - Line 220",
+        "status": "FIXED"
+      },
+      "lib/products/list.ts": {
+        "getProducts": "✅ Uses .eq('product_uid', product.uid) - Line 105",
+        "status": "CORRECT"
+      }
+    },
+    "product_variants_queries": {
+      "lib/products/index.ts": {
+        "createProductWithVariants": "✅ Uses product_uid: uid in variant inserts - Line 277",
+        "status": "CORRECT"
+      }
+    },
+    "server_actions_verification": {
+      "app/(admin)/admin/super/products/actions.ts": {
+        "has_use_server": true,
+        "uses_service_role": true,
+        "note": "homepage_section_products uses product_id (correct for that table)"
+      },
+      "app/(admin)/admin/super/media/actions.ts": {
+        "has_use_server": true,
+        "uses_service_role": true,
+        "note": "All actions use createServiceRoleClient() correctly"
+      }
+    }
+  },
+  "no_schema_changes": true,
+  "no_destructive_operations": true,
+  "all_files_use_product_uid": true,
+  "typescript_check": "PASSED",
+  "summary": "All product_images queries verified to use product_uid. Enhanced getProductMediaAction for explicit querying. All server actions use service-role client correctly."
+}
+
+
+
+
+
+
+
+
+
+

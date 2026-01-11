@@ -1,0 +1,147 @@
+{
+  "missing_files": [
+    "lib/import/products.ts",
+    "lib/import/variants.ts"
+  ],
+  "empty_files": [],
+  "invalid_imports": [
+    {
+      "file": "app/(admin)/admin/super/products/import/ImportClient.tsx",
+      "issue": "Function named 'fileToBase64' but uses readAsText() - misleading name, but functionally correct since server action expects CSV string",
+      "line": 42
+    }
+  ],
+  "wrong_client_usages": [],
+  "silent_failure_points": [
+    {
+      "file": "lib/import/engine.ts",
+      "location": "parseCSV function, line 96",
+      "issue": "Silently skips rows where values.length !== headers.length without logging or reporting",
+      "severity": "medium"
+    },
+    {
+      "file": "lib/import/engine.ts",
+      "location": "executeImport function, line 355-357",
+      "issue": "Product already exists - silently skips with warning but doesn't increment any counter. Could lead to 0 products imported if all exist.",
+      "severity": "high"
+    },
+    {
+      "file": "lib/import/engine.ts",
+      "location": "executeImport function, line 440-442",
+      "issue": "Variant already exists - silently skips with warning but doesn't increment any counter. Could lead to 0 variants imported if all exist.",
+      "severity": "high"
+    },
+    {
+      "file": "lib/import/engine.ts",
+      "location": "executeImport function, line 448-450",
+      "issue": "Missing color or size ID - continues without creating variant, but error is logged. This is acceptable behavior.",
+      "severity": "low"
+    },
+    {
+      "file": "lib/import/helpers.ts",
+      "location": "generateNextZYNUID function, line 18-21",
+      "issue": "On error fetching existing UIDs, falls back to 'ZYN-0001' without logging. Could cause UID collisions if query fails silently.",
+      "severity": "medium"
+    },
+    {
+      "file": "lib/import/engine.ts",
+      "location": "executeImport function, line 277-280",
+      "issue": "If import_runs table insert fails, returns early with error. This is correct behavior, not silent failure.",
+      "severity": "none"
+    }
+  ],
+  "field_mismatches": [
+    {
+      "file": "app/(admin)/admin/super/products/import/ImportClient.tsx",
+      "issue": "No field mismatch - ImportClient passes CSV strings directly to server action, not FormData",
+      "status": "ok"
+    },
+    {
+      "file": "app/api/import/products/route.ts",
+      "issue": "API route expects JSON body with 'productsCSV' and 'variantsCSV' fields, but this route is NOT called by ImportClient. ImportClient uses server action instead.",
+      "status": "route_disconnected"
+    }
+  ],
+  "uid_generator_issues": [
+    {
+      "file": "lib/import/helpers.ts",
+      "location": "generateNextZYNUID function",
+      "status": "working",
+      "issues": [
+        "Uses correct regex: /ZYN-(\\d+)/",
+        "Finds max existing UID correctly",
+        "Increments and zero-pads to 4 digits",
+        "BUT: Falls back to 'ZYN-0001' on query error without logging - could cause collisions"
+      ]
+    }
+  ],
+  "variant_merge_issues": [
+    {
+      "file": "lib/import/helpers.ts",
+      "location": "mergeVariantImagesBySKU function",
+      "status": "implemented",
+      "issues": [
+        "Correctly uses first non-empty Images_JSON for each SKU",
+        "Properly parses JSON arrays, comma-separated strings, or single URLs",
+        "BUT: No conflict reporting when multiple rows have different Images_JSON for same SKU - just uses first silently"
+      ]
+    },
+    {
+      "file": "lib/import/engine.ts",
+      "location": "executeImport function, line 420-422",
+      "status": "used_correctly",
+      "note": "Variant image merge is called before processing variants"
+    }
+  ],
+  "route_disconnection_issues": [
+    {
+      "file": "app/api/import/products/route.ts",
+      "issue": "API route exists but is NEVER called. ImportClient uses server action 'runImportAction' from actions.ts instead.",
+      "severity": "low",
+      "note": "Route is orphaned - either remove it or wire ImportClient to use it"
+    },
+    {
+      "file": "app/api/import/variants/route.ts",
+      "issue": "API route exists but just returns info message. Never called. Variants are processed together with products.",
+      "severity": "low",
+      "note": "Route is informational only - could be removed or kept for API documentation"
+    },
+    {
+      "file": "app/(admin)/admin/super/products/import/actions.ts",
+      "status": "connected",
+      "note": "Server action correctly calls executeImport and previewImport from lib/import/engine.ts"
+    }
+  ],
+  "duplicate_import_systems": [
+    {
+      "issue": "TWO separate import systems exist in the codebase:",
+      "system1": {
+        "path": "lib/import/engine.ts",
+        "used_by": "app/(admin)/admin/super/products/import/actions.ts",
+        "status": "active"
+      },
+      "system2": {
+        "path": "lib/importer/index.ts",
+        "used_by": "app/(admin)/admin/import/actions.ts",
+        "status": "active"
+      },
+      "severity": "high",
+      "note": "This could cause confusion. Both systems are active and may have different behaviors."
+    }
+  ],
+  "summary": "Import system has structural issues: (1) Two separate import systems exist (lib/import vs lib/importer), (2) API routes are orphaned and not used, (3) Silent skipping of existing products/variants could lead to 0 imports, (4) UID generator fallback could cause collisions, (5) Missing lib/import/products.ts and lib/import/variants.ts files (but functionality exists in engine.ts). Core functionality appears to work but needs consolidation and better error handling."
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+

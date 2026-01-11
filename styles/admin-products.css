@@ -1,0 +1,35 @@
+.admin-table-row {
+  transition: background-color 0.2s ease;
+}
+
+.admin-table-row:hover {
+  @apply bg-offwhite;
+}
+
+.product-drawer-overlay {
+  background-color: rgba(0, 0, 0, 0.3);
+}
+
+.product-detail-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  gap: 1rem;
+}
+
+.badge-gold {
+  @apply bg-gold/10 text-gold-darker border-gold/20;
+}
+
+.badge-bronze {
+  @apply bg-orange-100 text-orange-800 border-orange-200;
+}
+
+.badge-active {
+  @apply bg-green-100 text-green-800 border-green-200;
+}
+
+.badge-inactive {
+  @apply bg-gray-100 text-gray-600 border-gray-200;
+}
+
+

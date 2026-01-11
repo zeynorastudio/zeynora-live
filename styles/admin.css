@@ -1,0 +1,45 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+.admin-sidebar-width {
+  width: 240px;
+}
+
+.admin-sidebar-item {
+  @apply flex items-center px-3 py-2.5 text-sm font-medium text-silver-darker rounded-lg transition-all duration-200;
+}
+
+.admin-sidebar-item:hover {
+  @apply bg-offwhite text-night;
+}
+
+.admin-sidebar-item.active {
+  @apply bg-offwhite text-gold;
+}
+
+.admin-sidebar-icon {
+  @apply w-5 h-5 mr-3 text-silver-dark transition-colors;
+}
+
+.admin-sidebar-item:hover .admin-sidebar-icon {
+  @apply text-gold;
+}
+
+/* Mobile Sidebar Transition */
+.sidebar-mobile-enter {
+  transform: translateX(-100%);
+}
+.sidebar-mobile-enter-active {
+  transform: translateX(0);
+  transition: transform 300ms ease-in-out;
+}
+.sidebar-mobile-exit {
+  transform: translateX(0);
+}
+.sidebar-mobile-exit-active {
+  transform: translateX(-100%);
+  transition: transform 300ms ease-in-out;
+}
+
+

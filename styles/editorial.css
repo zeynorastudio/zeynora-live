@@ -1,0 +1,85 @@
+/* Editorial CSS: Global utility classes for luxury visual refinements */
+/* Structure-only: No logic, pure styling utilities */
+
+/* Section Spacing */
+.section-gap-lg {
+  padding-block: 3rem; /* Mobile */
+}
+
+@media (min-width: 768px) {
+  .section-gap-lg {
+    padding-block: 6rem; /* Desktop */
+  }
+}
+
+.section-gap-md {
+  padding-block: 2rem; /* Mobile */
+}
+
+@media (min-width: 768px) {
+  .section-gap-md {
+    padding-block: 4rem; /* Desktop */
+  }
+}
+
+/* Luxury Hover Effect */
+.luxury-hover {
+  transition: all 300ms ease;
+}
+
+.luxury-hover:hover {
+  transform: scale(1.02);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+}
+
+/* Editorial Divider */
+.editorial-divider {
+  border-bottom: 1px solid theme(colors.silver);
+}
+
+/* Fade In Animation (UI only) */
+.fade-in {
+  animation: fadeIn 0.5s ease-in-out;
+}
+
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+/* Slide Up Animation (UI only) */
+.slide-up {
+  animation: slideUp 0.5s ease-out;
+}
+
+@keyframes slideUp {
+  from {
+    opacity: 0;
+    transform: translateY(20px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* Warm Shadow Override */
+.warm-shadow {
+  box-shadow: 0 4px 12px rgba(205, 127, 50, 0.15);
+}
+
+.warm-shadow-sm {
+  box-shadow: 0 2px 8px rgba(205, 127, 50, 0.1);
+}
+
+.warm-shadow-lg {
+  box-shadow: 0 8px 24px rgba(205, 127, 50, 0.2);
+}
+
+
+
+
