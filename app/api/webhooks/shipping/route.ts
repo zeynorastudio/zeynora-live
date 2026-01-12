@@ -26,31 +26,42 @@ export async function POST(req: NextRequest) {
     }
 
     // 2) Try JSON.parse
+    let parsed = null;
     let isJson = false;
     try {
       if (raw.trim()) {
-        JSON.parse(raw);
+        parsed = JSON.parse(raw);
         isJson = true;
       }
     } catch {
       isJson = false;
     }
 
-    // 3) Read signature headers
-    const sig =
-      req.headers.get("x-shiprocket-signature") ||
-      req.headers.get("x-api-key");
+    // 3) Extract headers separately
+    const sig = req.headers.get("x-shiprocket-signature");
+    const token = req.headers.get("x-api-key");
 
-    // 4) Verification Mode: No signature + valid JSON = Shiprocket TEST
-    if (!sig && isJson) {
-      console.log("Shiprocket verification accepted");
+    // 4) Determine if this is a TEST webhook
+    const isTest =
+      isJson &&
+      (
+        !sig ||
+        parsed?.event === "test" ||
+        parsed?.type === "test" ||
+        parsed?.message?.toLowerCase()?.includes("test") ||
+        parsed?.data == null
+      );
+
+    // 5) Test/Verification Mode: Accept test webhooks even with token
+    if (isTest) {
+      console.log("Shiprocket test/verification accepted");
       return NextResponse.json(
         { ok: true, mode: "verification" },
         { status: 200 }
       );
     }
 
-    // 5) Real Webhook Mode: Signature exists - forward to strict handler
+    // 6) Real Webhook Mode: Signature exists - forward to strict handler
     if (sig) {
       // Reconstruct request with same body and headers
       const reconstructedReq = new NextRequest(req.url, {
@@ -62,7 +73,7 @@ export async function POST(req: NextRequest) {
       return await shiprocketPostHandler(reconstructedReq);
     }
 
-    // 6) Invalid Request: No signature and invalid JSON
+    // 7) Invalid Request: No signature and not a test
     return NextResponse.json(
       { error: "Unauthorized" },
       { status: 401 }
