@@ -173,8 +173,18 @@ export async function createShipmentForPaidOrder(
       billingAddress as Address | null
     );
 
+    // Log before calling Shiprocket
+    console.log("AUTO_SHIPMENT_START", {
+      orderId: order.id,
+      shiprocketEnabled: process.env.SHIPROCKET_ENABLED,
+      pickup: process.env.SHIPROCKET_PICKUP_LOCATION,
+    });
+
     // Create shipment in Shiprocket
     const response = await createShiprocketOrder(fulfillmentPayload.shiprocketPayload);
+
+    // Log after API call success
+    console.log("AUTO_SHIPMENT_SUCCESS", response);
 
     // Store shipment details in database
     const { error: updateError } = await supabase
@@ -244,6 +254,9 @@ export async function createShipmentForPaidOrder(
     };
   } catch (error: unknown) {
     const errorMessage = error instanceof Error ? error.message : "Unknown error";
+    
+    // Log auto-booking failure
+    console.error("AUTO_SHIPMENT_FAILED", (error as any)?.response?.data || error);
     
     console.error("[SHIPMENT] Shipment creation failed:", {
       order_id: orderId,

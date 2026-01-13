@@ -151,6 +151,9 @@ export async function createShiprocketOrder(
 ): Promise<ShiprocketOrderResponse> {
   const token = await authenticate();
 
+  // Log after auth token
+  console.log("SHIPROCKET_TOKEN_OK");
+
   try {
     const response = await fetch(`${SHIPROCKET_BASE_URL}/external/orders/create/adhoc`, {
       method: "POST",
