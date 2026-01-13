@@ -7,6 +7,7 @@
 import { createServiceRoleClient } from "@/lib/supabase/server";
 
 const SHIPROCKET_BASE_URL = process.env.SHIPROCKET_BASE_URL || "https://apiv2.shiprocket.in/v1";
+const SHIPROCKET_AUTH_URL = process.env.SHIPROCKET_AUTH_URL || `${SHIPROCKET_BASE_URL}/external/auth/login`;
 const SHIPROCKET_EMAIL = process.env.SHIPROCKET_EMAIL;
 const SHIPROCKET_PASSWORD = process.env.SHIPROCKET_PASSWORD;
 
@@ -102,7 +103,9 @@ export async function authenticate(): Promise<string> {
   }
 
   try {
-    const response = await fetch(`${SHIPROCKET_BASE_URL}/external/auth/login`, {
+    // FINAL FIX: Use SHIPROCKET_AUTH_URL env variable if set, otherwise construct from BASE_URL
+    const authUrl = SHIPROCKET_AUTH_URL;
+    const response = await fetch(authUrl, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",

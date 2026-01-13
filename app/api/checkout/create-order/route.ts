@@ -18,7 +18,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createServerClient, createServiceRoleClient } from "@/lib/supabase/server";
 import { z } from "zod";
-import { calculateShippingRate } from "@/lib/shipping/rate-calculator";
 import { createRazorpayOrder } from "@/lib/payments/razorpay";
 import { getDefaultWeight } from "@/lib/shipping/config";
 
@@ -167,10 +166,11 @@ export async function POST(req: NextRequest) {
     // PART 4: Calculate shipping cost (internal only, not charged)
     // Phase 3.4: Use global default weight and dimensions
     const assumedWeight = getDefaultWeight();
-    const shippingResult = await calculateShippingRate(address.pincode);
     
-    // Per Phase 3.1: If API fails, set shipping_cost = 0 and continue silently
-    const internalShippingCost = shippingResult.success ? shippingResult.shipping_cost : 0;
+    // FINAL FIX: Checkout must NOT call Shiprocket - skip rate calculation
+    // Shipping cost will be calculated later when order is paid
+    const internalShippingCost = 0;
+    const shippingResult = { success: false, shipping_cost: 0 };
 
     // Customer sees FREE shipping, so total_payable = subtotal
     const totalPayable = subtotal;
@@ -234,9 +234,10 @@ export async function POST(req: NextRequest) {
       items_snapshot: orderItemsSnapshot,
       shipping: {
         cost_calculated: internalShippingCost,
-        courier_name: shippingResult.courier_name || null,
-        estimated_days: shippingResult.estimated_days || null,
-        calculation_success: shippingResult.success,
+        courier_name: null,
+        estimated_days: null,
+        calculation_success: false,
+        note: "Shipping cost will be calculated after payment",
       },
       checkout_source: user ? "logged_in" : "guest",
     };

@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createServiceRoleClient } from "@/lib/supabase/server";
 import { verifyWebhookSignature, buildIdempotencyKey } from "@/lib/payments/webhook";
+import { createShipmentForPaidOrder } from "@/lib/shipping/create-shipment";
 
 export const dynamic = "force-dynamic";
 
@@ -209,19 +210,19 @@ export async function POST(req: NextRequest) {
           status: "paid",
         } as unknown as never);
 
-        // Phase 3.3: Trigger shipment creation (fire and forget)
+        // FINAL FIX: Trigger shipment creation directly (not via HTTP)
         // Only creates shipment for PAID orders - idempotent
+        // Wrapped in try/catch to ensure webhook never fails
         try {
-          const shipmentUrl = `${process.env.NEXT_PUBLIC_BASE_URL || "http://localhost:3000"}/api/shipping/create-shipment`;
-          fetch(shipmentUrl, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ order_id: order.id }),
-          }).catch((err) => {
-            console.error("[WEBHOOK] Shipment creation trigger error (non-fatal):", err);
+          await createShipmentForPaidOrder(order.id);
+        } catch (shipmentError: any) {
+          // FINAL FIX: Log error but do NOT break webhook or redirect
+          console.error("[WEBHOOK] Shipment creation error (non-fatal):", {
+            order_id: order.id,
+            error: shipmentError?.message || shipmentError,
           });
-        } catch (shipmentError) {
-          console.error("[WEBHOOK] Shipment creation trigger error (non-fatal):", shipmentError);
+          // Order remains PAID even if shipment creation fails
+          // Admin can manually retry shipment creation later
         }
 
         break;
