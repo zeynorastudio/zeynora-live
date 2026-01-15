@@ -103,7 +103,7 @@ export async function authenticate(): Promise<string> {
   }
 
   try {
-    // FINAL FIX: Use SHIPROCKET_AUTH_URL env variable if set, otherwise construct from BASE_URL
+    // STEP 3: Use SHIPROCKET_AUTH_URL directly (no double appending)
     const authUrl = SHIPROCKET_AUTH_URL;
     const response = await fetch(authUrl, {
       method: "POST",
@@ -126,6 +126,9 @@ export async function authenticate(): Promise<string> {
     if (!data.token) {
       throw new Error("Shiprocket auth response missing token");
     }
+
+    // STEP 2: Log auth success
+    console.log("SHIPROCKET_AUTH_OK");
 
     // Store token in database with expiry
     const expiresInSeconds = data.expires_in || 72000; // Default 20 hours
@@ -153,9 +156,6 @@ export async function createShiprocketOrder(
   payload: ShiprocketOrderPayload
 ): Promise<ShiprocketOrderResponse> {
   const token = await authenticate();
-
-  // Log after auth token
-  console.log("SHIPROCKET_TOKEN_OK");
 
   try {
     const response = await fetch(`${SHIPROCKET_BASE_URL}/external/orders/create/adhoc`, {

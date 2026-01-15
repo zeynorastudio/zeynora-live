@@ -210,19 +210,26 @@ export async function POST(req: NextRequest) {
           status: "paid",
         } as unknown as never);
 
-        // FINAL FIX: Trigger shipment creation directly (not via HTTP)
+        // STEP 1: Trigger shipment creation after marking order as PAID
         // Only creates shipment for PAID orders - idempotent
         // Wrapped in try/catch to ensure webhook never fails
-        try {
-          await createShipmentForPaidOrder(order.id);
-        } catch (shipmentError: any) {
-          // FINAL FIX: Log error but do NOT break webhook or redirect
-          console.error("[WEBHOOK] Shipment creation error (non-fatal):", {
+        if (process.env.SHIPROCKET_ENABLED === "true") {
+          try {
+            console.log("SHIPMENT_TRIGGERED_FOR_ORDER", order.id);
+            await createShipmentForPaidOrder(order.id);
+          } catch (shipmentError: any) {
+            // Log error but do NOT break webhook or redirect
+            console.error("[WEBHOOK] Shipment creation error (non-fatal):", {
+              order_id: order.id,
+              error: shipmentError?.message || shipmentError,
+            });
+            // Order remains PAID even if shipment creation fails
+            // Admin can manually retry shipment creation later
+          }
+        } else {
+          console.log("[WEBHOOK] Shiprocket disabled - skipping shipment creation", {
             order_id: order.id,
-            error: shipmentError?.message || shipmentError,
           });
-          // Order remains PAID even if shipment creation fails
-          // Admin can manually retry shipment creation later
         }
 
         break;

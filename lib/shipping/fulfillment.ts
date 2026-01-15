@@ -146,18 +146,20 @@ export async function prepareFulfillmentPayload(
   const productsMap = new Map(typedProductsForMap.map((p) => [p.uid, p]));
   const variantsMap = new Map(typedVariants.map((v) => [v.id, v]));
 
-  // Use logistics defaults (env-based with safe fallbacks)
+  // STEP 5: Use logistics defaults (env-based with safe fallbacks)
   // Apply weight & dimensions at SHIPMENT LEVEL
   // Do NOT attempt per-product calculation
+  // Ensure dimensions and weight are always set (never zero, never undefined)
   const packageDimensions = {
-    length: LOGISTICS_DEFAULTS.lengthCm,
-    breadth: LOGISTICS_DEFAULTS.breadthCm,
-    height: LOGISTICS_DEFAULTS.heightCm,
+    length: LOGISTICS_DEFAULTS.lengthCm || 16, // STEP 5: Hard fallback
+    breadth: LOGISTICS_DEFAULTS.breadthCm || 13, // STEP 5: Hard fallback
+    height: LOGISTICS_DEFAULTS.heightCm || 4, // STEP 5: Hard fallback
   };
   
   // Total weight is the default weight (regardless of quantity)
   // Single global weight per shipment
-  const totalPhysicalWeight = LOGISTICS_DEFAULTS.weightKg;
+  // STEP 5: Ensure weight is always set (never zero, never undefined)
+  const totalPhysicalWeight = LOGISTICS_DEFAULTS.weightKg || 1.5; // STEP 5: Hard fallback
   
   // Phase 3.4: No fallback flag needed - we always use global defaults
   const fallbackUsed = false;
@@ -173,6 +175,7 @@ export async function prepareFulfillmentPayload(
   const shiprocketPayload: ShiprocketOrderPayload = {
     order_id: order.order_number,
     order_date: new Date(order.created_at).toISOString().split("T")[0],
+    // STEP 4: Use SHIPROCKET_PICKUP_LOCATION env var (no hardcoded values)
     pickup_location: process.env.SHIPROCKET_PICKUP_LOCATION || "Primary",
     billing_customer_name: billAddr.full_name || "Customer",
     billing_address: billAddr.line1 || "",
@@ -204,10 +207,11 @@ export async function prepareFulfillmentPayload(
     }),
     payment_method: order.payment_status === "paid" ? "Prepaid" : "COD",
     sub_total: orderItems.reduce((sum, item) => sum + item.price * item.quantity, 0),
-    length: packageDimensions.length,
-    breadth: packageDimensions.breadth,
-    height: packageDimensions.height,
-    weight: chargeableWeight,
+    // STEP 5: Ensure dimensions and weight are always set (never zero, never undefined)
+    length: packageDimensions.length || 16,
+    breadth: packageDimensions.breadth || 13,
+    height: packageDimensions.height || 4,
+    weight: chargeableWeight || 1.5,
   };
 
   return {

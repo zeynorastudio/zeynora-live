@@ -102,6 +102,9 @@ export async function createShipmentForPaidOrder(
     };
   }
 
+  // STEP 2: Add start log
+  console.log("SHIPMENT_START", order.id);
+
   // Enforce SHIPROCKET_ENABLED flag (fail loud, not silent)
   if (process.env.SHIPROCKET_ENABLED !== "true") {
     const errorMessage = "Shiprocket disabled: paid order requires manual fulfillment";
@@ -173,25 +176,26 @@ export async function createShipmentForPaidOrder(
       billingAddress as Address | null
     );
 
-    // Log before calling Shiprocket
-    console.log("AUTO_SHIPMENT_START", {
-      orderId: order.id,
-      shiprocketEnabled: process.env.SHIPROCKET_ENABLED,
-      pickup: process.env.SHIPROCKET_PICKUP_LOCATION,
-    });
+    // STEP 2: Log payload before calling Shiprocket
+    console.log("SHIPMENT_PAYLOAD", fulfillmentPayload.shiprocketPayload);
 
-    // Create shipment in Shiprocket
+    // Create shipment in Shiprocket (auth happens inside createShiprocketOrder)
     const response = await createShiprocketOrder(fulfillmentPayload.shiprocketPayload);
 
-    // Log after API call success
-    console.log("AUTO_SHIPMENT_SUCCESS", response);
+    // STEP 2: Log after API call success
+    console.log("SHIPMENT_BOOKED", {
+      shipment_id: response.shipment_id,
+      awb_code: response.awb_code,
+      courier_name: response.courier_name,
+      status: response.status,
+    });
 
-    // Store shipment details in database
+    // STEP 6: Store shipment details in database
     const { error: updateError } = await supabase
       .from("orders")
       .update({
         shiprocket_shipment_id: String(response.shipment_id),
-        shipment_status: "created",
+        shipment_status: "BOOKED", // STEP 6: Use "BOOKED" status
         courier_name: response.courier_name || null,
         shipping_status: "processing",
         metadata: {
@@ -199,7 +203,8 @@ export async function createShipmentForPaidOrder(
           shipping: {
             ...((order.metadata as Record<string, any>)?.shipping || {}),
             shipment_id: response.shipment_id,
-            awb: response.awb_code || null,
+            awb_code: response.awb_code || null, // STEP 6: Store awb_code
+            awb: response.awb_code || null, // Keep for backward compatibility
             courier: response.courier_name || null,
             courier_company_id: response.courier_company_id || null,
             tracking_url: response.tracking_url || null,
@@ -255,8 +260,12 @@ export async function createShipmentForPaidOrder(
   } catch (error: unknown) {
     const errorMessage = error instanceof Error ? error.message : "Unknown error";
     
-    // Log auto-booking failure
-    console.error("AUTO_SHIPMENT_FAILED", (error as any)?.response?.data || error);
+    // STEP 2: Log failure with detailed error info
+    console.error("SHIPMENT_FAILED", {
+      order_id: orderId,
+      error: errorMessage,
+      error_details: (error as any)?.response?.data || error,
+    });
     
     console.error("[SHIPMENT] Shipment creation failed:", {
       order_id: orderId,
@@ -264,16 +273,17 @@ export async function createShipmentForPaidOrder(
       error: errorMessage,
     });
 
-    // Mark order as SHIPMENT_FAILED (but don't cancel order)
+    // STEP 6: Mark order as FAILED (but don't cancel order)
     try {
       await supabase
         .from("orders")
         .update({
-          shipment_status: "failed",
+          shipment_status: "FAILED", // STEP 6: Use "FAILED" status
           metadata: {
             ...(order.metadata as Record<string, any> || {}),
             shipment_error: errorMessage,
             shipment_failed_at: new Date().toISOString(),
+            shipment_error_details: (error as any)?.response?.data || null,
           },
           updated_at: new Date().toISOString(),
         } as unknown as never)
