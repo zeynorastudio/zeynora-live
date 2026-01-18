@@ -92,10 +92,27 @@ export async function POST(req: NextRequest) {
     const { customer, address, items } = validation.data;
     const normalizedPhone = normalizePhone(customer.phone);
 
-    // Validate pincode format
-    if (!/^\d{6}$/.test(address.pincode)) {
+    // Validate phone format (must be exactly 10 digits)
+    if (!/^\d{10}$/.test(normalizedPhone)) {
       return NextResponse.json(
-        { success: false, error: "Invalid pincode format" },
+        { success: false, error: "Invalid phone format - must be exactly 10 digits" },
+        { status: 400 }
+      );
+    }
+
+    // Validate pincode format (must be exactly 6 digits)
+    const cleanPincode = address.pincode.replace(/\D/g, "");
+    if (!/^\d{6}$/.test(cleanPincode)) {
+      return NextResponse.json(
+        { success: false, error: "Invalid pincode format - must be exactly 6 digits" },
+        { status: 400 }
+      );
+    }
+
+    // Validate address line1 is not empty
+    if (!address.line1 || !address.line1.trim()) {
+      return NextResponse.json(
+        { success: false, error: "Shipping address line 1 is required" },
         { status: 400 }
       );
     }
@@ -244,6 +261,7 @@ export async function POST(req: NextRequest) {
 
     // PART 2: Create the order record
     // Initial state: order_status='created', payment_status='pending'
+    // Include shipping address fields directly in order record
     const { data: order, error: orderError } = await supabase
       .from("orders")
       .insert({
@@ -264,6 +282,16 @@ export async function POST(req: NextRequest) {
         discount_amount: 0,
         total_amount: totalPayable,
         payment_provider: "razorpay",
+        // Shipping address fields - stored directly in order record
+        shipping_name: customer.name,
+        shipping_phone: normalizedPhone,
+        shipping_email: customer.email || null,
+        shipping_address1: address.line1,
+        shipping_address2: address.line2 || null,
+        shipping_city: address.city,
+        shipping_state: address.state,
+        shipping_pincode: cleanPincode,
+        shipping_country: address.country || "India",
         metadata: metadata,
         created_at: new Date().toISOString(),
         updated_at: new Date().toISOString(),

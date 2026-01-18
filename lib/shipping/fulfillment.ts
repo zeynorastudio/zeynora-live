@@ -37,6 +37,16 @@ interface OrderWithItems {
   metadata: Record<string, unknown> | null;
   shiprocket_shipment_id: string | null;
   created_at: string;
+  // Shipping address fields stored directly in order
+  shipping_name: string | null;
+  shipping_phone: string | null;
+  shipping_email: string | null;
+  shipping_address1: string | null;
+  shipping_address2: string | null;
+  shipping_city: string | null;
+  shipping_state: string | null;
+  shipping_pincode: string | null;
+  shipping_country: string | null;
 }
 
 interface OrderItem {
@@ -516,11 +526,11 @@ export async function safeCreateAWBIfMissing(orderId: string): Promise<{
 }> {
   const supabase = createServiceRoleClient();
 
-  // Fetch order with full details
+  // Fetch order with full details including shipping address fields
   const { data: orderData, error: orderError } = await supabase
     .from("orders")
     .select(
-      "id, order_number, user_id, shipping_address_id, billing_address_id, payment_status, payment_provider, metadata, shiprocket_shipment_id, shipment_status, created_at"
+      "id, order_number, user_id, shipping_address_id, billing_address_id, payment_status, payment_provider, metadata, shiprocket_shipment_id, shipment_status, created_at, shipping_name, shipping_phone, shipping_email, shipping_address1, shipping_address2, shipping_city, shipping_state, shipping_pincode, shipping_country"
     )
     .eq("id", orderId)
     .single();
@@ -572,27 +582,91 @@ export async function safeCreateAWBIfMissing(orderId: string): Promise<{
     };
   }
 
-  // Fetch addresses
-  if (!order.shipping_address_id) {
-    return { success: false, error: "Shipping address missing" };
+  // STEP: Check for shipping address - prefer order.shipping_* fields, fallback to addresses table
+  let shippingAddress: Address | null = null;
+  let billingAddress: Address | null = null;
+
+  // Check if shipping address is stored directly in order record
+  const hasDirectShippingAddress = 
+    order.shipping_name &&
+    order.shipping_phone &&
+    order.shipping_address1 &&
+    order.shipping_city &&
+    order.shipping_state &&
+    order.shipping_pincode;
+
+  if (hasDirectShippingAddress) {
+    // Use shipping address from order record
+    shippingAddress = {
+      id: order.id, // Use order ID as identifier
+      full_name: order.shipping_name,
+      phone: order.shipping_phone,
+      line1: order.shipping_address1,
+      line2: order.shipping_address2 || null,
+      city: order.shipping_city,
+      state: order.shipping_state,
+      pincode: order.shipping_pincode,
+      country: order.shipping_country || "India",
+    };
+
+    // For billing, use shipping address if no separate billing address
+    billingAddress = shippingAddress;
+  } else if (order.shipping_address_id) {
+    // Fallback: Fetch from addresses table
+    const { data: fetchedShippingAddress } = await supabase
+      .from("addresses")
+      .select("*")
+      .eq("id", order.shipping_address_id)
+      .single();
+
+    if (!fetchedShippingAddress) {
+      console.error("[FULFILLMENT_MISSING_SHIPPING_ADDRESS]", {
+        order_id: orderId,
+        order_number: order.order_number,
+        shipping_address_id: order.shipping_address_id,
+        has_direct_fields: false,
+        timestamp: new Date().toISOString(),
+      });
+
+      // Mark order as FAILED
+      await markFulfillmentFailed(
+        orderId,
+        order.order_number,
+        "MISSING_SHIPPING_ADDRESS: Shipping address not found in addresses table"
+      );
+
+      return { success: false, error: "MISSING_SHIPPING_ADDRESS" };
+    }
+
+    shippingAddress = fetchedShippingAddress as Address;
+
+    const billingAddressId = order.billing_address_id || order.shipping_address_id;
+    const { data: fetchedBillingAddress } = await supabase
+      .from("addresses")
+      .select("*")
+      .eq("id", billingAddressId)
+      .single();
+
+    billingAddress = (fetchedBillingAddress as Address) || null;
+  } else {
+    // No shipping address at all
+    console.error("[FULFILLMENT_MISSING_SHIPPING_ADDRESS]", {
+      order_id: orderId,
+      order_number: order.order_number,
+      shipping_address_id: order.shipping_address_id,
+      has_direct_fields: hasDirectShippingAddress,
+      timestamp: new Date().toISOString(),
+    });
+
+    // Mark order as FAILED
+    await markFulfillmentFailed(
+      orderId,
+      order.order_number,
+      "MISSING_SHIPPING_ADDRESS: No shipping address found in order record or addresses table"
+    );
+
+    return { success: false, error: "MISSING_SHIPPING_ADDRESS" };
   }
-
-  const { data: shippingAddress } = await supabase
-    .from("addresses")
-    .select("*")
-    .eq("id", order.shipping_address_id)
-    .single();
-
-  if (!shippingAddress) {
-    return { success: false, error: "Shipping address not found" };
-  }
-
-  const billingAddressId = order.billing_address_id || order.shipping_address_id;
-  const { data: billingAddress } = await supabase
-    .from("addresses")
-    .select("*")
-    .eq("id", billingAddressId)
-    .single();
 
   // Fetch order items
   const { data: orderItems } = await supabase

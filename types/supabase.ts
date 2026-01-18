@@ -516,6 +516,15 @@ export interface Database {
           razorpay_order_id: string | null // Phase 3.2: Razorpay order ID
           payment_method: string | null // Phase 3.2: Payment method (card, netbanking, wallet, upi)
           paid_at: string | null // Phase 3.2: Timestamp when payment was captured
+          shipping_name: string | null // Shipping recipient name
+          shipping_phone: string | null // Shipping contact phone (10 digits)
+          shipping_email: string | null // Shipping email
+          shipping_address1: string | null // Primary shipping address line
+          shipping_address2: string | null // Secondary shipping address line
+          shipping_city: string | null // Shipping city
+          shipping_state: string | null // Shipping state/province
+          shipping_pincode: string | null // Shipping pincode (6 digits)
+          shipping_country: string | null // Shipping country (default: India)
           metadata: Json | null
           created_at: string
           updated_at: string
@@ -547,6 +556,15 @@ export interface Database {
           razorpay_order_id?: string | null // Phase 3.2
           payment_method?: string | null // Phase 3.2
           paid_at?: string | null // Phase 3.2
+          shipping_name?: string | null // Shipping recipient name
+          shipping_phone?: string | null // Shipping contact phone (10 digits)
+          shipping_email?: string | null // Shipping email
+          shipping_address1?: string | null // Primary shipping address line
+          shipping_address2?: string | null // Secondary shipping address line
+          shipping_city?: string | null // Shipping city
+          shipping_state?: string | null // Shipping state/province
+          shipping_pincode?: string | null // Shipping pincode (6 digits)
+          shipping_country?: string | null // Shipping country (default: India)
           metadata?: Json | null
           created_at?: string
           updated_at?: string

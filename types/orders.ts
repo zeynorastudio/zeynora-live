@@ -103,6 +103,17 @@ export interface Order {
   billing_address_id: string | null;
   shipping_address_id: string | null;
   
+  // Shipping address fields (stored directly in order)
+  shipping_name: string | null;
+  shipping_phone: string | null;
+  shipping_email: string | null;
+  shipping_address1: string | null;
+  shipping_address2: string | null;
+  shipping_city: string | null;
+  shipping_state: string | null;
+  shipping_pincode: string | null;
+  shipping_country: string | null;
+  
   // Payment tracking (Phase 3.2)
   payment_provider: string | null;
   payment_provider_response: Record<string, unknown> | null;
