@@ -11,7 +11,7 @@ import Link from "next/link";
 import { format } from "date-fns";
 import { ArrowLeft, Package, Truck, MapPin, AlertCircle, CheckCircle, Clock } from "lucide-react";
 import Card from "@/components/ui/Card";
-import Badge from "@/components/ui/Badge";
+import { Badge } from "@/components/ui/Badge";
 import Button from "@/components/ui/Button";
 import { getShippingStatusLabel, getShippingStatusBadgeVariant } from "@/lib/shipping/timeline";
 import { getPublicUrl } from "@/lib/utils/images";

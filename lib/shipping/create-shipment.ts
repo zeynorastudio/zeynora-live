@@ -1,12 +1,15 @@
 /**
- * Shipment Creation Service
- * Phase 3.3: Creates shipments in Shiprocket only after payment confirmation
+ * FINAL — Shipment Creation Service
+ * 
+ * Creates shipments in Shiprocket only after payment confirmation
  * 
  * Requirements:
  * - Only create shipment when order_status = PAID
  * - Idempotent (no duplicate shipments)
  * - Never expose tokens to frontend
  * - Handle failures gracefully
+ * - On success: shipment_status = "BOOKED"
+ * - On failure: shipment_status = "FAILED" (allows retry)
  */
 
 import { createServiceRoleClient } from "@/lib/supabase/server";
@@ -15,7 +18,8 @@ import {
   ShiprocketOrderPayload,
   ShiprocketOrderResponse,
 } from "./shiprocket-client";
-import { prepareFulfillmentPayload } from "./fulfillment";
+import { prepareFulfillmentPayload, validateShiprocketPayload } from "./fulfillment";
+import { calculateShippingRate } from "./rate-calculator";
 
 interface OrderWithItems {
   id: string;
@@ -27,7 +31,7 @@ interface OrderWithItems {
   shiprocket_shipment_id: string | null;
   shipment_status: string | null;
   courier_name: string | null;
-  metadata: any;
+  metadata: Record<string, unknown> | null;
   created_at: string;
 }
 
@@ -56,19 +60,41 @@ interface Address {
 interface CreateShipmentResult {
   success: boolean;
   shipment_id?: string;
+  awb_code?: string;
   courier_name?: string;
+  internal_shipping_cost?: number;
   error?: string;
   already_exists?: boolean;
 }
 
 /**
  * Create shipment in Shiprocket for a paid order
- * Phase 3.3: Only creates shipment when order_status = PAID
+ * 
+ * Flow:
+ * 1. Validate order is PAID
+ * 2. Check idempotency (skip if already BOOKED)
+ * 3. Fetch addresses and items
+ * 4. Calculate shipping cost
+ * 5. Create shipment in Shiprocket
+ * 6. Update order with results
+ * 
+ * On success:
+ * - Save shipment_id, awb_code
+ * - shipment_status = "BOOKED"
+ * - internal_shipping_cost stored
+ * 
+ * On failure:
+ * - shipment_status = "FAILED"
+ * - Save error message
+ * - Allow retry
  */
 export async function createShipmentForPaidOrder(
   orderId: string
 ): Promise<CreateShipmentResult> {
   const supabase = createServiceRoleClient();
+
+  // Log start
+  console.log("[SHIPMENT_START]", { order_id: orderId, timestamp: new Date().toISOString() });
 
   // Fetch order with full details
   const { data: orderData, error: orderError } = await supabase
@@ -80,7 +106,7 @@ export async function createShipmentForPaidOrder(
     .single();
 
   if (orderError || !orderData) {
-    console.error("[SHIPMENT] Order not found:", {
+    console.error("[SHIPMENT_ERROR] Order not found:", {
       order_id: orderId,
       error: orderError?.message || "No data returned",
     });
@@ -91,7 +117,7 @@ export async function createShipmentForPaidOrder(
 
   // CRITICAL: Only create shipment for PAID orders
   if (order.order_status !== "paid" || order.payment_status !== "paid") {
-    console.warn("[SHIPMENT] Order not paid - skipping shipment creation:", {
+    console.warn("[SHIPMENT_SKIP] Order not paid:", {
       order_id: orderId,
       order_status: order.order_status,
       payment_status: order.payment_status,
@@ -102,33 +128,35 @@ export async function createShipmentForPaidOrder(
     };
   }
 
-  // STEP 2: Add start log
-  console.log("SHIPMENT_START", order.id);
-
-  // Enforce SHIPROCKET_ENABLED flag (fail loud, not silent)
+  // Enforce SHIPROCKET_ENABLED flag
   if (process.env.SHIPROCKET_ENABLED !== "true") {
     const errorMessage = "Shiprocket disabled: paid order requires manual fulfillment";
-    console.error("[SHIPMENT] Shiprocket disabled:", {
-      order_id: orderId,
-      order_number: order.order_number,
-    });
-    // This error MUST be caught by the caller
-    // Payment webhook MUST NOT fail
-    // Order MUST remain PAID
-    throw new Error(errorMessage);
+    console.error("[SHIPMENT_DISABLED]", { order_id: orderId });
+    // Don't throw - return failure so order remains PAID
+    return { success: false, error: errorMessage };
   }
 
-  // Idempotency check: if shipment already exists and is not failed, return existing data
-  // Allow retry if shipment_status is "failed" or if no shipment_id exists
-  if (order.shiprocket_shipment_id && order.shipment_status && order.shipment_status !== "failed") {
-    console.log("[SHIPMENT] Shipment already exists:", {
+  // Idempotency check: if shipment already BOOKED, return existing data
+  // Allow retry if shipment_status is "FAILED" or null
+  if (
+    order.shiprocket_shipment_id && 
+    order.shipment_status && 
+    order.shipment_status !== "FAILED" &&
+    order.shipment_status !== "PENDING"
+  ) {
+    console.log("[SHIPMENT_EXISTS]", {
       order_id: orderId,
       shipment_id: order.shiprocket_shipment_id,
       status: order.shipment_status,
     });
+    
+    const existingMetadata = (order.metadata as Record<string, unknown>) || {};
+    const shippingData = (existingMetadata.shipping as Record<string, unknown>) || {};
+    
     return {
       success: true,
       shipment_id: order.shiprocket_shipment_id,
+      awb_code: (shippingData.awb_code as string) || undefined,
       courier_name: order.courier_name || undefined,
       already_exists: true,
     };
@@ -167,66 +195,160 @@ export async function createShipmentForPaidOrder(
     return { success: false, error: "Order has no items" };
   }
 
+  const typedShippingAddress = shippingAddress as Address;
+  const typedBillingAddress = billingAddress as Address | null;
+  const typedOrderItems = orderItems as OrderItem[];
+
+  // STEP 3: Calculate shipping cost BEFORE creating shipment
+  let internalShippingCost = 0;
   try {
-    // Prepare fulfillment payload (includes weight, dimensions, address details)
+    const shippingPincode = typedShippingAddress.pincode || "";
+    if (shippingPincode && /^\d{6}$/.test(shippingPincode.replace(/\D/g, ""))) {
+      const rateResult = await calculateShippingRate(shippingPincode.replace(/\D/g, ""));
+      if (rateResult.success) {
+        internalShippingCost = rateResult.shipping_cost;
+        console.log("[SHIPPING_COST_CALCULATED]", {
+          order_id: orderId,
+          pincode: shippingPincode,
+          cost: internalShippingCost,
+          courier: rateResult.courier_name,
+        });
+      }
+    }
+  } catch (rateError) {
+    console.warn("[SHIPPING_COST_FAILED]", {
+      order_id: orderId,
+      error: rateError instanceof Error ? rateError.message : "Unknown error",
+    });
+    // Continue with 0 cost - don't block shipment
+  }
+
+  try {
+    // Prepare fulfillment payload (uses ENV-based weight/dimensions)
     const fulfillmentPayload = await prepareFulfillmentPayload(
-      order as any,
-      orderItems as OrderItem[],
-      shippingAddress as Address,
-      billingAddress as Address | null
+      order as unknown as Parameters<typeof prepareFulfillmentPayload>[0],
+      typedOrderItems,
+      typedShippingAddress,
+      typedBillingAddress
     );
 
-    // STEP 2: Log payload before calling Shiprocket
-    console.log("SHIPMENT_PAYLOAD", fulfillmentPayload.shiprocketPayload);
+    // STEP: Validate payload BEFORE calling Shiprocket API
+    const payloadValidation = validateShiprocketPayload(fulfillmentPayload.shiprocketPayload);
+    
+    if (!payloadValidation.valid) {
+      const errorMessage = `Invalid payload: ${payloadValidation.errors.join("; ")}`;
+      
+      console.error("[SHIPMENT_PAYLOAD_INVALID]", {
+        order_id: orderId,
+        order_number: order.order_number,
+        errors: payloadValidation.errors,
+        timestamp: new Date().toISOString(),
+      });
+
+      // Mark order as FAILED with validation error
+      try {
+        const existingMetadata = (order.metadata as Record<string, unknown>) || {};
+        await supabase
+          .from("orders")
+          .update({
+            shipment_status: "FAILED",
+            metadata: {
+              ...existingMetadata,
+              shipment_error: errorMessage,
+              shipment_validation_errors: payloadValidation.errors,
+              shipment_failed_at: new Date().toISOString(),
+            },
+            updated_at: new Date().toISOString(),
+          } as unknown as never)
+          .eq("id", orderId);
+
+        // Write audit log for validation failure
+        await supabase.from("admin_audit_logs").insert({
+          action: "shipment_validation_failed",
+          target_resource: "orders",
+          target_id: orderId,
+          details: {
+            order_number: order.order_number,
+            errors: payloadValidation.errors,
+            requires_attention: true,
+          },
+        } as unknown as never);
+      } catch (dbError) {
+        console.error("[SHIPMENT_VALIDATION_DB_UPDATE_FAILED]", {
+          order_id: orderId,
+          error: dbError instanceof Error ? dbError.message : "Unknown error",
+        });
+      }
+
+      return {
+        success: false,
+        error: errorMessage,
+      };
+    }
+
+    // Log valid payload before calling Shiprocket
+    console.log("[SHIPMENT_PAYLOAD_VALID]", {
+      order_number: order.order_number,
+      pickup_location: fulfillmentPayload.shiprocketPayload.pickup_location,
+      weight: fulfillmentPayload.chargeableWeight,
+      dimensions: fulfillmentPayload.packageDimensions,
+      timestamp: new Date().toISOString(),
+    });
 
     // Create shipment in Shiprocket (auth happens inside createShiprocketOrder)
     const response = await createShiprocketOrder(fulfillmentPayload.shiprocketPayload);
 
-    // STEP 2: Log after API call success
-    console.log("SHIPMENT_BOOKED", {
+    // Log success
+    console.log("[SHIPMENT_BOOKED]", {
+      order_id: orderId,
+      order_number: order.order_number,
       shipment_id: response.shipment_id,
       awb_code: response.awb_code,
       courier_name: response.courier_name,
       status: response.status,
     });
 
-    // STEP 6: Store shipment details in database
+    // Store shipment details in database
+    const existingMetadata = (order.metadata as Record<string, unknown>) || {};
     const { error: updateError } = await supabase
       .from("orders")
       .update({
         shiprocket_shipment_id: String(response.shipment_id),
-        shipment_status: "BOOKED", // STEP 6: Use "BOOKED" status
+        shipment_status: "BOOKED", // Success status
         courier_name: response.courier_name || null,
         shipping_status: "processing",
+        internal_shipping_cost: internalShippingCost, // Store calculated shipping cost
         metadata: {
-          ...(order.metadata as Record<string, any> || {}),
+          ...existingMetadata,
           shipping: {
-            ...((order.metadata as Record<string, any>)?.shipping || {}),
+            ...(existingMetadata.shipping as Record<string, unknown> || {}),
             shipment_id: response.shipment_id,
-            awb_code: response.awb_code || null, // STEP 6: Store awb_code
-            awb: response.awb_code || null, // Keep for backward compatibility
+            awb_code: response.awb_code || null,
+            awb: response.awb_code || null, // Backward compatibility
             courier: response.courier_name || null,
             courier_company_id: response.courier_company_id || null,
             tracking_url: response.tracking_url || null,
             expected_delivery: response.expected_delivery_date || null,
             updated_at: new Date().toISOString(),
           },
+          internal_shipping_cost: internalShippingCost,
         },
         updated_at: new Date().toISOString(),
       } as unknown as never)
       .eq("id", orderId);
 
     if (updateError) {
-      console.error("[SHIPMENT] Failed to update order after shipment creation:", {
+      console.error("[SHIPMENT_DB_UPDATE_FAILED]", {
         order_id: orderId,
         error: updateError.message,
       });
       // Shipment was created in Shiprocket but DB update failed
-      // Return success but log error for manual review
       return {
         success: true,
         shipment_id: String(response.shipment_id),
+        awb_code: response.awb_code || undefined,
         courier_name: response.courier_name || undefined,
+        internal_shipping_cost: internalShippingCost,
         error: "Shipment created but database update failed",
       };
     }
@@ -234,7 +356,7 @@ export async function createShipmentForPaidOrder(
     // Write audit log
     try {
       await supabase.from("admin_audit_logs").insert({
-        action: "shipment_created",
+        action: "shipment_booked",
         target_resource: "orders",
         target_id: orderId,
         details: {
@@ -242,48 +364,43 @@ export async function createShipmentForPaidOrder(
           courier_name: response.courier_name,
           awb_code: response.awb_code,
           order_number: order.order_number,
+          internal_shipping_cost: internalShippingCost,
         },
       } as unknown as never);
     } catch (auditError) {
-      // Non-fatal - log but don't fail
-      console.error("[SHIPMENT] Audit log write failed (non-fatal):", {
-        order_id: orderId,
-        error: auditError instanceof Error ? auditError.message : "Unknown error",
-      });
+      // Non-fatal
+      console.warn("[SHIPMENT_AUDIT_FAILED] (non-fatal)");
     }
 
     return {
       success: true,
       shipment_id: String(response.shipment_id),
+      awb_code: response.awb_code || undefined,
       courier_name: response.courier_name || undefined,
+      internal_shipping_cost: internalShippingCost,
     };
   } catch (error: unknown) {
     const errorMessage = error instanceof Error ? error.message : "Unknown error";
     
-    // STEP 2: Log failure with detailed error info
-    console.error("SHIPMENT_FAILED", {
-      order_id: orderId,
-      error: errorMessage,
-      error_details: (error as any)?.response?.data || error,
-    });
-    
-    console.error("[SHIPMENT] Shipment creation failed:", {
+    // Log failure with detailed error info
+    console.error("[SHIPMENT_FAILED]", {
       order_id: orderId,
       order_number: order.order_number,
       error: errorMessage,
+      timestamp: new Date().toISOString(),
     });
 
-    // STEP 6: Mark order as FAILED (but don't cancel order)
+    // Mark order as FAILED (allows retry)
     try {
+      const existingMetadata = (order.metadata as Record<string, unknown>) || {};
       await supabase
         .from("orders")
         .update({
-          shipment_status: "FAILED", // STEP 6: Use "FAILED" status
+          shipment_status: "FAILED", // Failure status - allows retry
           metadata: {
-            ...(order.metadata as Record<string, any> || {}),
+            ...existingMetadata,
             shipment_error: errorMessage,
             shipment_failed_at: new Date().toISOString(),
-            shipment_error_details: (error as any)?.response?.data || null,
           },
           updated_at: new Date().toISOString(),
         } as unknown as never)
@@ -291,7 +408,7 @@ export async function createShipmentForPaidOrder(
 
       // Write audit log for failure
       await supabase.from("admin_audit_logs").insert({
-        action: "shipment_creation_failed",
+        action: "shipment_failed",
         target_resource: "orders",
         target_id: orderId,
         details: {
@@ -301,7 +418,7 @@ export async function createShipmentForPaidOrder(
         },
       } as unknown as never);
     } catch (updateError) {
-      console.error("[SHIPMENT] Failed to mark order as SHIPMENT_FAILED:", {
+      console.error("[SHIPMENT_FAILURE_UPDATE_FAILED]", {
         order_id: orderId,
         error: updateError instanceof Error ? updateError.message : "Unknown error",
       });
@@ -313,13 +430,3 @@ export async function createShipmentForPaidOrder(
     };
   }
 }
-
-
-
-
-
-
-
-
-
-

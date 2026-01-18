@@ -1,10 +1,14 @@
 /**
  * Shipping Serviceability Helper Functions
  * Pure helper functions for serviceability checks
+ * 
+ * Features:
+ * - Auto-retry on 401 with token refresh
+ * - No silent failures - all errors logged
  */
 
 import { createServiceRoleClient } from "@/lib/supabase/server";
-import { authenticate } from "./shiprocket-client";
+import { authenticate, forceTokenRefresh } from "./shiprocket-client";
 import { getDefaultWeight } from "./config";
 
 const METRO_PINCODE_PREFIXES = ["11", "40", "56", "50", "60", "70", "41", "38", "30", "39"];
@@ -63,36 +67,75 @@ export async function checkServiceability(
   const SHIPROCKET_PASSWORD = process.env.SHIPROCKET_PASSWORD;
 
   if (SHIPROCKET_EMAIL && SHIPROCKET_PASSWORD) {
-    try {
-      const token = await authenticate();
-      const response = await fetch(
-        `https://apiv2.shiprocket.in/v1/external/courier/serviceability/?pickup_pincode=110001&delivery_pincode=${pincode}&weight=${weight}`,
-        {
-          method: "GET",
-          headers: {
-            Authorization: `Bearer ${token}`,
-          },
-        }
-      );
+    let token: string;
+    let retryCount = 0;
+    const maxRetries = 2;
 
-      if (response.ok) {
-        const data = await response.json();
-        const availableCouriers = data.data?.available_courier_companies || [];
+    while (retryCount < maxRetries) {
+      try {
+        token = await authenticate();
+        const response = await fetch(
+          `https://apiv2.shiprocket.in/v1/external/courier/serviceability/?pickup_pincode=110001&delivery_pincode=${pincode}&weight=${weight}`,
+          {
+            method: "GET",
+            headers: {
+              Authorization: `Bearer ${token}`,
+            },
+          }
+        );
 
-        if (availableCouriers.length > 0) {
-          return {
-            serviceable: true,
-            available_couriers: availableCouriers.map((c: any) => c.courier_name || c.name),
-            cod_available: availableCouriers.some(
-              (c: any) => c.cod === true || c.cod_available === true
-            ),
-            estimated_delivery_range: calculateETA(pincode),
-          };
+        // Handle 401 - token expired, refresh and retry ONCE
+        if (response.status === 401 && retryCount < maxRetries - 1) {
+          console.warn("[SERVICEABILITY_401]", {
+            pincode,
+            action: "Forcing token refresh and retrying",
+            timestamp: new Date().toISOString(),
+          });
+          await forceTokenRefresh();
+          retryCount++;
+          continue;
         }
+
+        if (response.ok) {
+          const data = await response.json() as { data?: { available_courier_companies?: Array<{ courier_name?: string; name?: string; cod?: boolean; cod_available?: boolean }> } };
+          const availableCouriers = data.data?.available_courier_companies || [];
+
+          if (availableCouriers.length > 0) {
+            return {
+              serviceable: true,
+              available_couriers: availableCouriers.map((c) => c.courier_name || c.name || "Unknown"),
+              cod_available: availableCouriers.some(
+                (c) => c.cod === true || c.cod_available === true
+              ),
+              estimated_delivery_range: calculateETA(pincode),
+            };
+          }
+        } else {
+          console.error("[SERVICEABILITY_API_ERROR]", {
+            pincode,
+            status: response.status,
+            timestamp: new Date().toISOString(),
+          });
+        }
+        break; // Exit retry loop on success or non-401 error
+      } catch (apiError) {
+        const errorMessage = apiError instanceof Error ? apiError.message : "Unknown error";
+        console.error("[SERVICEABILITY_ERROR]", {
+          pincode,
+          error: errorMessage,
+          retry_count: retryCount,
+          timestamp: new Date().toISOString(),
+        });
+        
+        // If it's a 401 error and we haven't exhausted retries, continue
+        if (errorMessage.includes("401") && retryCount < maxRetries - 1) {
+          await forceTokenRefresh();
+          retryCount++;
+          continue;
+        }
+        // Fall through to fallback logic
+        break;
       }
-    } catch (apiError) {
-      console.error("Shiprocket API error, using fallback:", apiError);
-      // Fall through to fallback logic
     }
   }
 

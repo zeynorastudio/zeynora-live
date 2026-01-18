@@ -1,28 +1,24 @@
 /**
  * Shiprocket API Client Wrapper
  * Handles authentication, order creation, AWB generation, and webhook verification
- * Phase 3.3: Token management with database storage and auto-regeneration
+ * 
+ * FINAL IMPLEMENTATION: Token management with auto-refresh
+ * - Uses SHIPROCKET_AUTH_URL directly
+ * - Stores token with expiry time
+ * - Auto re-auth on expiry
+ * - Never fails silently - all errors logged
  */
 
 import { createServiceRoleClient } from "@/lib/supabase/server";
 
+// Environment configuration - direct URLs, no duplicate building
 const SHIPROCKET_BASE_URL = process.env.SHIPROCKET_BASE_URL || "https://apiv2.shiprocket.in/v1";
 const SHIPROCKET_AUTH_URL = process.env.SHIPROCKET_AUTH_URL || `${SHIPROCKET_BASE_URL}/external/auth/login`;
 const SHIPROCKET_EMAIL = process.env.SHIPROCKET_EMAIL;
 const SHIPROCKET_PASSWORD = process.env.SHIPROCKET_PASSWORD;
 
-/**
- * SHIPROCKET_API_KEY and SHIPROCKET_API_SECRET
- * 
- * Reserved for future authentication modes.
- * Currently, Shiprocket authentication uses email/password (SHIPROCKET_EMAIL/SHIPROCKET_PASSWORD).
- * These API key variables are not currently used in the codebase.
- * 
- * Safe to ignore - they are reserved for potential future API key-based authentication.
- * DO NOT remove these variables as they may be needed for future Shiprocket API changes.
- */
-const SHIPROCKET_API_KEY = process.env.SHIPROCKET_API_KEY;
-const SHIPROCKET_API_SECRET = process.env.SHIPROCKET_API_SECRET;
+// In-memory token cache for same-process reuse (fallback if DB unavailable)
+let cachedToken: { token: string; expiresAt: number } | null = null;
 
 interface ShiprocketAuthResponse {
   token: string;
@@ -81,31 +77,85 @@ export interface ShiprocketOrderResponse {
 }
 
 /**
- * Get valid Shiprocket token from database or regenerate if expired
- * Phase 3.3: Automatic token management with database storage
+ * Check if in-memory cached token is still valid
+ * Returns false if expired or about to expire
+ */
+function isCachedTokenValid(): boolean {
+  if (!cachedToken) return false;
+  // Add 5 minute buffer before expiry
+  const bufferMs = 5 * 60 * 1000;
+  const isValid = Date.now() < cachedToken.expiresAt - bufferMs;
+  
+  if (!isValid && cachedToken) {
+    console.log("[SHIPROCKET_TOKEN_EXPIRED]", {
+      timestamp: new Date().toISOString(),
+      expired_at: new Date(cachedToken.expiresAt).toISOString(),
+      current_time: new Date().toISOString(),
+    });
+  }
+  
+  return isValid;
+}
+
+/**
+ * Get valid Shiprocket token - auto-refresh if expired
+ * 
+ * Flow:
+ * 1. Check in-memory cache (fastest)
+ * 2. Check database stored token
+ * 3. If both expired/missing → regenerate from Shiprocket
+ * 
+ * Logging:
+ * - SHIPROCKET_AUTH_START: Before auth attempt
+ * - SHIPROCKET_AUTH_OK: Successful authentication
+ * - SHIPROCKET_AUTH_FAIL: Authentication failed
  */
 export async function authenticate(): Promise<string> {
-  const supabase = createServiceRoleClient();
-
-  // Try to get valid token from database
-  const { data: tokenData, error: tokenError } = await supabase
-    .rpc("get_shiprocket_token");
-
-  if (!tokenError && tokenData) {
-    return tokenData;
+  // Step 1: Check in-memory cache first
+  if (isCachedTokenValid() && cachedToken) {
+    return cachedToken.token;
   }
 
-  // Token expired or doesn't exist - regenerate
+  const supabase = createServiceRoleClient();
+
+  // Step 2: Try to get valid token from database
+  try {
+    const { data: tokenData, error: tokenError } = await supabase
+      .rpc("get_shiprocket_token");
+
+    if (!tokenError && tokenData) {
+      // Cache the token in memory
+      cachedToken = {
+        token: tokenData,
+        // Assume 20 hours validity if not stored
+        expiresAt: Date.now() + 20 * 60 * 60 * 1000,
+      };
+      return tokenData;
+    }
+  } catch (dbError) {
+    // DB check failed - continue to regenerate
+    console.warn("[SHIPROCKET_AUTH] DB token fetch failed, will regenerate:", 
+      dbError instanceof Error ? dbError.message : "Unknown error");
+  }
+
+  // Step 3: Token expired or doesn't exist - regenerate
   if (!SHIPROCKET_EMAIL || !SHIPROCKET_PASSWORD) {
+    console.error("[SHIPROCKET_AUTH_FAIL] Missing credentials");
     throw new Error(
       "Shiprocket credentials missing. Set SHIPROCKET_EMAIL and SHIPROCKET_PASSWORD environment variables."
     );
   }
 
+  // Log auth start
+  console.log("[SHIPROCKET_AUTH_START]", {
+    timestamp: new Date().toISOString(),
+    auth_url: SHIPROCKET_AUTH_URL,
+    email: SHIPROCKET_EMAIL.substring(0, 3) + "***", // Partial for security
+  });
+
   try {
-    // STEP 3: Use SHIPROCKET_AUTH_URL directly (no double appending)
-    const authUrl = SHIPROCKET_AUTH_URL;
-    const response = await fetch(authUrl, {
+    // Use SHIPROCKET_AUTH_URL directly - no duplicate URL building
+    const response = await fetch(SHIPROCKET_AUTH_URL, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -118,131 +168,401 @@ export async function authenticate(): Promise<string> {
 
     if (!response.ok) {
       const errorText = await response.text();
+      console.error("[SHIPROCKET_AUTH_FAIL]", {
+        timestamp: new Date().toISOString(),
+        status: response.status,
+        error: errorText.substring(0, 200),
+      });
       throw new Error(`Shiprocket auth failed: ${response.status} ${errorText}`);
     }
 
     const data = (await response.json()) as ShiprocketAuthResponse;
     
     if (!data.token) {
+      console.error("[SHIPROCKET_AUTH_FAIL] No token in response");
       throw new Error("Shiprocket auth response missing token");
     }
 
-    // STEP 2: Log auth success
-    console.log("SHIPROCKET_AUTH_OK");
+    // Calculate expiry time (default 20 hours = 72000 seconds)
+    const expiresInSeconds = data.expires_in || 72000;
+    const expiresAt = Date.now() + expiresInSeconds * 1000;
 
-    // Store token in database with expiry
-    const expiresInSeconds = data.expires_in || 72000; // Default 20 hours
-    const { error: storeError } = await supabase.rpc("store_shiprocket_token", {
-      p_token: data.token,
-      p_expires_in_seconds: expiresInSeconds,
+    // Log auth success
+    console.log("[SHIPROCKET_AUTH_OK]", {
+      timestamp: new Date().toISOString(),
+      expires_in_hours: Math.round(expiresInSeconds / 3600),
     });
 
-    if (storeError) {
-      console.error("Failed to store Shiprocket token:", storeError);
-      // Continue anyway - token is still valid for this request
+    // Cache in memory
+    cachedToken = {
+      token: data.token,
+      expiresAt,
+    };
+
+    // Store token in database with expiry (non-blocking)
+    try {
+      const { error: storeError } = await supabase.rpc("store_shiprocket_token", {
+        p_token: data.token,
+        p_expires_in_seconds: expiresInSeconds,
+      });
+
+      if (storeError) {
+        console.warn("[SHIPROCKET_AUTH] Token storage failed (non-fatal):", storeError.message);
+      }
+    } catch (storeException) {
+      // Non-fatal - token is still valid for this request
+      console.warn("[SHIPROCKET_AUTH] Token storage exception (non-fatal):", 
+        storeException instanceof Error ? storeException.message : "Unknown error");
     }
 
     return data.token;
-  } catch (error: any) {
-    console.error("Shiprocket authentication error:", error);
-    throw new Error(`Failed to authenticate with Shiprocket: ${error.message}`);
+  } catch (error: unknown) {
+    const errorMessage = error instanceof Error ? error.message : "Unknown error";
+    console.error("[SHIPROCKET_AUTH_FAIL]", {
+      timestamp: new Date().toISOString(),
+      error: errorMessage,
+    });
+    throw new Error(`Failed to authenticate with Shiprocket: ${errorMessage}`);
+  }
+}
+
+/**
+ * Force token refresh - clears cache and re-authenticates
+ * Useful when API returns 401 or token appears invalid
+ * 
+ * Logging:
+ * - SHIPROCKET_TOKEN_REFRESH_START: Before refresh attempt
+ * - SHIPROCKET_TOKEN_REFRESH_OK: Successful refresh
+ * - SHIPROCKET_TOKEN_REFRESH_FAIL: Refresh failed
+ */
+export async function forceTokenRefresh(): Promise<string> {
+  console.log("[SHIPROCKET_TOKEN_REFRESH_START]", {
+    timestamp: new Date().toISOString(),
+    reason: "Force refresh triggered (likely 401 or expired token)",
+  });
+
+  // Clear in-memory cache
+  cachedToken = null;
+  
+  // Clear DB stored token
+  const supabase = createServiceRoleClient();
+  try {
+    await supabase.rpc("clear_shiprocket_token");
+  } catch (e) {
+    // Non-fatal
+    console.warn("[SHIPROCKET_AUTH] Token clear failed (non-fatal)");
+  }
+
+  try {
+    // Re-authenticate
+    const newToken = await authenticate();
+    
+    console.log("[SHIPROCKET_TOKEN_REFRESH_OK]", {
+      timestamp: new Date().toISOString(),
+      token_prefix: newToken.substring(0, 10) + "...",
+    });
+    
+    return newToken;
+  } catch (error: unknown) {
+    const errorMessage = error instanceof Error ? error.message : "Unknown error";
+    
+    console.error("[SHIPROCKET_TOKEN_REFRESH_FAIL]", {
+      timestamp: new Date().toISOString(),
+      error: errorMessage,
+    });
+    
+    throw error;
   }
 }
 
 /**
  * Create order in Shiprocket and request AWB
+ * Auto-retries with token refresh on 401
+ * 
+ * Behavior on 401:
+ * - Force refresh token once
+ * - Retry once
+ * - If still fails → throw error (caller marks FAILED)
  */
 export async function createShiprocketOrder(
   payload: ShiprocketOrderPayload
 ): Promise<ShiprocketOrderResponse> {
-  const token = await authenticate();
+  let token = await authenticate();
+  let retryCount = 0;
+  const maxRetries = 2;
 
-  try {
-    const response = await fetch(`${SHIPROCKET_BASE_URL}/external/orders/create/adhoc`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${token}`,
-      },
-      body: JSON.stringify(payload),
-    });
+  console.log("[SHIPROCKET_ORDER_CREATE_START]", {
+    order_id: payload.order_id,
+    timestamp: new Date().toISOString(),
+  });
 
-    const responseText = await response.text();
-    let data: any;
-
+  while (retryCount < maxRetries) {
     try {
-      data = JSON.parse(responseText);
-    } catch (parseError) {
-      throw new Error(`Invalid JSON response: ${responseText}`);
-    }
+      const response = await fetch(`${SHIPROCKET_BASE_URL}/external/orders/create/adhoc`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify(payload),
+      });
 
-    if (!response.ok) {
-      throw new Error(
-        `Shiprocket API error: ${response.status} - ${data.message || JSON.stringify(data)}`
-      );
-    }
+      const responseText = await response.text();
+      let data: Record<string, unknown>;
 
-    return data as ShiprocketOrderResponse;
-  } catch (error: any) {
-    console.error("Shiprocket order creation error:", error);
-    throw error;
+      try {
+        data = JSON.parse(responseText) as Record<string, unknown>;
+      } catch (parseError) {
+        console.error("[SHIPROCKET_ORDER_CREATE_PARSE_ERROR]", {
+          order_id: payload.order_id,
+          response_preview: responseText.substring(0, 200),
+          timestamp: new Date().toISOString(),
+        });
+        throw new Error(`Invalid JSON response: ${responseText.substring(0, 200)}`);
+      }
+
+      // Handle 401 - token expired, refresh and retry ONCE
+      if (response.status === 401) {
+        console.warn("[SHIPROCKET_401_RECEIVED]", {
+          order_id: payload.order_id,
+          retry_count: retryCount,
+          max_retries: maxRetries,
+          timestamp: new Date().toISOString(),
+        });
+
+        if (retryCount < maxRetries - 1) {
+          console.log("[SHIPROCKET_401_RETRY]", {
+            order_id: payload.order_id,
+            action: "Forcing token refresh and retrying",
+            timestamp: new Date().toISOString(),
+          });
+          token = await forceTokenRefresh();
+          retryCount++;
+          continue;
+        } else {
+          // Exhausted retries - throw
+          console.error("[SHIPROCKET_401_EXHAUSTED]", {
+            order_id: payload.order_id,
+            message: "Token refresh did not resolve 401 - marking as FAILED",
+            timestamp: new Date().toISOString(),
+          });
+          throw new Error("Shiprocket API returned 401 after token refresh - authentication failed");
+        }
+      }
+
+      if (!response.ok) {
+        const errorMsg = (data.message as string) || JSON.stringify(data);
+        console.error("[SHIPROCKET_ORDER_CREATE_API_ERROR]", {
+          order_id: payload.order_id,
+          status: response.status,
+          error: errorMsg,
+          timestamp: new Date().toISOString(),
+        });
+        throw new Error(`Shiprocket API error: ${response.status} - ${errorMsg}`);
+      }
+
+      console.log("[SHIPROCKET_ORDER_CREATE_OK]", {
+        order_id: payload.order_id,
+        shipment_id: data.shipment_id,
+        status: data.status,
+        timestamp: new Date().toISOString(),
+      });
+
+      return data as unknown as ShiprocketOrderResponse;
+    } catch (error: unknown) {
+      const errorMessage = error instanceof Error ? error.message : "Unknown error";
+      
+      // If it's a 401 error and we haven't exhausted retries, continue
+      if (errorMessage.includes("401") && retryCount < maxRetries - 1) {
+        console.warn("[SHIPROCKET_401_CAUGHT_IN_CATCH]", {
+          order_id: payload.order_id,
+          retry_count: retryCount,
+          timestamp: new Date().toISOString(),
+        });
+        token = await forceTokenRefresh();
+        retryCount++;
+        continue;
+      }
+      
+      console.error("[SHIPROCKET_ORDER_CREATE_ERROR]", {
+        order_id: payload.order_id,
+        error: errorMessage,
+        retry_count: retryCount,
+        timestamp: new Date().toISOString(),
+      });
+      throw error;
+    }
   }
+
+  console.error("[SHIPROCKET_ORDER_CREATE_EXHAUSTED]", {
+    order_id: payload.order_id,
+    message: "All retries exhausted",
+    timestamp: new Date().toISOString(),
+  });
+  throw new Error("Shiprocket order creation failed after retries");
 }
 
 /**
  * Generate AWB for existing shipment
+ * Auto-retries with token refresh on 401
  */
 export async function generateAWB(shipmentId: number): Promise<ShiprocketOrderResponse> {
-  const token = await authenticate();
+  let token = await authenticate();
+  let retryCount = 0;
+  const maxRetries = 2;
 
-  try {
-    const response = await fetch(`${SHIPROCKET_BASE_URL}/external/courier/assign/awb`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${token}`,
-      },
-      body: JSON.stringify({
+  console.log("[SHIPROCKET_AWB_GENERATE_START]", {
+    shipment_id: shipmentId,
+    timestamp: new Date().toISOString(),
+  });
+
+  while (retryCount < maxRetries) {
+    try {
+      const response = await fetch(`${SHIPROCKET_BASE_URL}/external/courier/assign/awb`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({
+          shipment_id: shipmentId,
+        }),
+      });
+
+      // Handle 401 - token expired, refresh and retry ONCE
+      if (response.status === 401 && retryCount < maxRetries - 1) {
+        console.warn("[SHIPROCKET_AWB_401_RECEIVED]", {
+          shipment_id: shipmentId,
+          action: "Forcing token refresh and retrying",
+          timestamp: new Date().toISOString(),
+        });
+        token = await forceTokenRefresh();
+        retryCount++;
+        continue;
+      }
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        console.error("[SHIPROCKET_AWB_GENERATE_ERROR]", {
+          shipment_id: shipmentId,
+          status: response.status,
+          error: errorText.substring(0, 200),
+          timestamp: new Date().toISOString(),
+        });
+        throw new Error(`AWB generation failed: ${response.status} ${errorText}`);
+      }
+
+      const data = (await response.json()) as ShiprocketOrderResponse;
+      
+      console.log("[SHIPROCKET_AWB_GENERATE_OK]", {
         shipment_id: shipmentId,
-      }),
-    });
+        awb_code: data.awb_code,
+        timestamp: new Date().toISOString(),
+      });
 
-    if (!response.ok) {
-      const errorText = await response.text();
-      throw new Error(`AWB generation failed: ${response.status} ${errorText}`);
+      return data;
+    } catch (error: unknown) {
+      const errorMessage = error instanceof Error ? error.message : "Unknown error";
+      
+      // If it's a 401 error and we haven't exhausted retries, continue
+      if (errorMessage.includes("401") && retryCount < maxRetries - 1) {
+        token = await forceTokenRefresh();
+        retryCount++;
+        continue;
+      }
+      
+      console.error("[SHIPROCKET_AWB_GENERATE_ERROR]", {
+        shipment_id: shipmentId,
+        error: errorMessage,
+        timestamp: new Date().toISOString(),
+      });
+      throw error;
     }
-
-    return (await response.json()) as ShiprocketOrderResponse;
-  } catch (error: any) {
-    console.error("AWB generation error:", error);
-    throw error;
   }
+
+  throw new Error("AWB generation failed after retries");
+}
+
+/**
+ * Shipment tracking response type
+ */
+export interface ShipmentTrackingResponse {
+  order_id?: number;
+  shipment_id?: number;
+  status?: string;
+  status_code?: number;
+  awb_code?: string;
+  courier_name?: string;
+  tracking?: Array<{
+    date: string;
+    activity: string;
+    location?: string;
+  }>;
+  [key: string]: unknown;
 }
 
 /**
  * Fetch shipment tracking details
+ * Auto-retries with token refresh on 401
  */
-export async function getShipmentTracking(shipmentId: number): Promise<any> {
-  const token = await authenticate();
+export async function getShipmentTracking(shipmentId: number): Promise<ShipmentTrackingResponse> {
+  let token = await authenticate();
+  let retryCount = 0;
+  const maxRetries = 2;
 
-  try {
-    const response = await fetch(`${SHIPROCKET_BASE_URL}/external/orders/show/${shipmentId}`, {
-      method: "GET",
-      headers: {
-        Authorization: `Bearer ${token}`,
-      },
-    });
+  while (retryCount < maxRetries) {
+    try {
+      const response = await fetch(`${SHIPROCKET_BASE_URL}/external/orders/show/${shipmentId}`, {
+        method: "GET",
+        headers: {
+          Authorization: `Bearer ${token}`,
+        },
+      });
 
-    if (!response.ok) {
-      const errorText = await response.text();
-      throw new Error(`Tracking fetch failed: ${response.status} ${errorText}`);
+      // Handle 401 - token expired, refresh and retry ONCE
+      if (response.status === 401 && retryCount < maxRetries - 1) {
+        console.warn("[SHIPROCKET_TRACKING_401]", {
+          shipment_id: shipmentId,
+          action: "Forcing token refresh and retrying",
+          timestamp: new Date().toISOString(),
+        });
+        token = await forceTokenRefresh();
+        retryCount++;
+        continue;
+      }
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        console.error("[SHIPROCKET_TRACKING_ERROR]", {
+          shipment_id: shipmentId,
+          status: response.status,
+          error: errorText.substring(0, 200),
+          timestamp: new Date().toISOString(),
+        });
+        throw new Error(`Tracking fetch failed: ${response.status} ${errorText}`);
+      }
+
+      return await response.json() as ShipmentTrackingResponse;
+    } catch (error: unknown) {
+      const errorMessage = error instanceof Error ? error.message : "Unknown error";
+      
+      // If it's a 401 error and we haven't exhausted retries, continue
+      if (errorMessage.includes("401") && retryCount < maxRetries - 1) {
+        token = await forceTokenRefresh();
+        retryCount++;
+        continue;
+      }
+      
+      console.error("[SHIPROCKET_TRACKING_ERROR]", {
+        shipment_id: shipmentId,
+        error: errorMessage,
+        timestamp: new Date().toISOString(),
+      });
+      throw error;
     }
-
-    return await response.json();
-  } catch (error: any) {
-    console.error("Tracking fetch error:", error);
-    throw error;
   }
+
+  throw new Error("Tracking fetch failed after retries");
 }
 
 /**
@@ -289,11 +609,11 @@ export async function retryWithBackoff<T>(
   for (let attempt = 0; attempt < maxRetries; attempt++) {
     try {
       return await fn();
-    } catch (error: any) {
-      lastError = error;
+    } catch (error: unknown) {
+      lastError = error instanceof Error ? error : new Error(String(error));
 
-      // Don't retry on 4xx errors (client errors)
-      if (error.message?.includes("4")) {
+      // Don't retry on 4xx errors (client errors) except 401
+      if (lastError.message?.includes("4") && !lastError.message?.includes("401")) {
         throw error;
       }
 
@@ -306,4 +626,3 @@ export async function retryWithBackoff<T>(
 
   throw lastError || new Error("Retry failed");
 }
-

@@ -1,23 +1,26 @@
 /**
- * Shiprocket Shipping Rate Calculator
+ * FINAL — Shiprocket Shipping Rate Calculator
  * 
- * Phase 3.1 — Internal shipping cost calculation
+ * Calculates the INTERNAL shipping cost from Shiprocket.
+ * This cost is NOT charged to customers (free shipping) but stored for analytics.
  * 
- * This module calculates the INTERNAL shipping cost from Shiprocket
- * that we pay to the carrier. This cost is NOT charged to customers
- * (free shipping) but stored for analytics and margin calculations.
+ * Uses:
+ * - Global default weight and dimensions from config
+ * - Shiprocket Rate API for courier availability and pricing
+ * 
+ * Returns:
+ * - shipping_cost: Lowest available rate
+ * - courier_name: Name of cheapest courier
+ * - estimated_days: Delivery estimate
  */
 
-import { authenticate } from "./shiprocket-client";
-import { getDefaultWeight, getDefaultDimensions, getDefaultPackage } from "./config";
+import { authenticate, forceTokenRefresh } from "./shiprocket-client";
+import { getDefaultWeight, getDefaultDimensions } from "./config";
 
 const SHIPROCKET_BASE_URL = process.env.SHIPROCKET_BASE_URL || "https://apiv2.shiprocket.in/v1";
 
 // Default pickup pincode (warehouse location)
 const DEFAULT_PICKUP_PINCODE = process.env.SHIPROCKET_PICKUP_PINCODE || "110001";
-
-// Phase 3.4: Use global default package configuration
-const DEFAULT_PACKAGE = getDefaultPackage();
 
 interface ShippingRateResult {
   success: boolean;
@@ -54,110 +57,161 @@ interface RateApiResponse {
 
 /**
  * Calculate shipping cost using Shiprocket Rate API
- * Phase 3.4: Always uses global default weight and dimensions
  * 
- * @param deliveryPincode - Customer's delivery pincode
- * @param weight - Package weight in kg (optional, uses global default 1.5 kg)
+ * Uses global default weight and dimensions from config.
+ * 
+ * @param deliveryPincode - Customer's delivery pincode (6 digits)
+ * @param weight - Package weight in kg (optional, uses global default)
  * @param dimensions - Package dimensions (optional, uses global default)
  * @param codPayment - Is this a COD order? (default: false for prepaid)
  * @returns ShippingRateResult with calculated cost
  */
 export async function calculateShippingRate(
   deliveryPincode: string,
-  weight: number = getDefaultWeight(),
+  weight?: number,
   dimensions?: { length: number; breadth: number; height: number },
   codPayment: boolean = false
 ): Promise<ShippingRateResult> {
-  // Validate pincode
-  if (!deliveryPincode || !/^\d{6}$/.test(deliveryPincode)) {
+  // Validate pincode (6 digits)
+  const cleanPincode = (deliveryPincode || "").replace(/\D/g, "");
+  if (!cleanPincode || !/^\d{6}$/.test(cleanPincode)) {
     return {
       success: false,
       shipping_cost: 0,
-      error: "Invalid delivery pincode",
+      error: "Invalid delivery pincode - must be 6 digits",
     };
   }
 
-  // Phase 3.4: Always use global default dimensions
-  const dims = dimensions || getDefaultDimensions();
+  // Use global defaults from config (ENV-based)
+  const shipmentWeight = weight || getDefaultWeight();
+  const shipmentDimensions = dimensions || getDefaultDimensions();
 
-  try {
-    // Authenticate with Shiprocket
-    const token = await authenticate();
+  let token: string;
+  let retryCount = 0;
+  const maxRetries = 2;
 
-    // Build query parameters for rate API
-    const params = new URLSearchParams({
-      pickup_postcode: DEFAULT_PICKUP_PINCODE,
-      delivery_postcode: deliveryPincode,
-      weight: weight.toString(),
-      length: dims.length.toString(),
-      breadth: dims.breadth.toString(),
-      height: dims.height.toString(),
-      cod: codPayment ? "1" : "0",
-    });
+  while (retryCount < maxRetries) {
+    try {
+      // Authenticate with Shiprocket
+      token = await authenticate();
 
-    // Call Shiprocket Rate API
-    const response = await fetch(
-      `${SHIPROCKET_BASE_URL}/external/courier/serviceability/?${params.toString()}`,
-      {
-        method: "GET",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${token}`,
-        },
+      // Build query parameters for rate API
+      const params = new URLSearchParams({
+        pickup_postcode: DEFAULT_PICKUP_PINCODE,
+        delivery_postcode: cleanPincode,
+        weight: shipmentWeight.toString(),
+        length: shipmentDimensions.length.toString(),
+        breadth: shipmentDimensions.breadth.toString(),
+        height: shipmentDimensions.height.toString(),
+        cod: codPayment ? "1" : "0",
+      });
+
+      // Call Shiprocket Rate API
+      const response = await fetch(
+        `${SHIPROCKET_BASE_URL}/external/courier/serviceability/?${params.toString()}`,
+        {
+          method: "GET",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${token}`,
+          },
+        }
+      );
+
+      // Handle 401 - token expired, refresh and retry ONCE
+      if (response.status === 401 && retryCount < maxRetries - 1) {
+        console.warn("[SHIPPING_RATE_401]", {
+          pincode: cleanPincode,
+          action: "Forcing token refresh and retrying",
+          timestamp: new Date().toISOString(),
+        });
+        await forceTokenRefresh();
+        retryCount++;
+        continue;
       }
-    );
 
-    if (!response.ok) {
-      console.error("[SHIPPING_RATE] API response not ok:", response.status);
-      // Return 0 as per Phase 3.1 requirements (continue silently)
+      if (!response.ok) {
+        console.error("[SHIPPING_RATE_API_ERROR]", {
+          pincode: cleanPincode,
+          status: response.status,
+          timestamp: new Date().toISOString(),
+        });
+        return {
+          success: false,
+          shipping_cost: 0,
+          error: `API returned ${response.status}`,
+        };
+      }
+
+      const data: RateApiResponse = await response.json();
+
+      if (!data.data?.available_courier_companies?.length) {
+        console.warn("[SHIPPING_RATE_NO_COURIERS]", {
+          pincode: cleanPincode,
+          timestamp: new Date().toISOString(),
+        });
+        return {
+          success: false,
+          shipping_cost: 0,
+          error: "No couriers available for this pincode",
+        };
+      }
+
+      // Get the cheapest available courier
+      const couriers = data.data.available_courier_companies;
+      const cheapestCourier = couriers.reduce((min, curr) => 
+        (curr.freight_charge || curr.rate) < (min.freight_charge || min.rate) ? curr : min
+      );
+
+      // Calculate total shipping cost (freight + COD if applicable)
+      const freightCharge = cheapestCourier.freight_charge || cheapestCourier.rate || 0;
+      const codCharge = codPayment ? (cheapestCourier.cod_charges || 0) : 0;
+      const totalShippingCost = freightCharge + codCharge;
+
+      return {
+        success: true,
+        shipping_cost: totalShippingCost,
+        courier_name: cheapestCourier.courier_name,
+        courier_company_id: cheapestCourier.courier_company_id,
+        estimated_days: cheapestCourier.estimated_delivery_days,
+      };
+
+    } catch (error: unknown) {
+      const errorMessage = error instanceof Error ? error.message : "Unknown error";
+      
+      // If it's a 401 error and we haven't exhausted retries, continue
+      if (errorMessage.includes("401") && retryCount < maxRetries - 1) {
+        console.warn("[SHIPPING_RATE_401_CAUGHT]", {
+          pincode: cleanPincode,
+          retry_count: retryCount,
+          timestamp: new Date().toISOString(),
+        });
+        await forceTokenRefresh();
+        retryCount++;
+        continue;
+      }
+      
+      console.error("[SHIPPING_RATE_ERROR]", {
+        pincode: cleanPincode,
+        error: errorMessage,
+        timestamp: new Date().toISOString(),
+      });
+      
+      // Return 0 cost and continue - don't block order flow
       return {
         success: false,
         shipping_cost: 0,
-        error: `API returned ${response.status}`,
+        error: errorMessage,
       };
     }
-
-    const data: RateApiResponse = await response.json();
-
-    if (!data.data?.available_courier_companies?.length) {
-      console.warn("[SHIPPING_RATE] No couriers available for pincode:", deliveryPincode);
-      return {
-        success: false,
-        shipping_cost: 0,
-        error: "No couriers available",
-      };
-    }
-
-    // Get the cheapest available courier
-    const couriers = data.data.available_courier_companies;
-    const cheapestCourier = couriers.reduce((min, curr) => 
-      (curr.freight_charge || curr.rate) < (min.freight_charge || min.rate) ? curr : min
-    );
-
-    // Calculate total shipping cost (freight + COD if applicable)
-    const freightCharge = cheapestCourier.freight_charge || cheapestCourier.rate || 0;
-    const codCharge = codPayment ? (cheapestCourier.cod_charges || 0) : 0;
-    const totalShippingCost = freightCharge + codCharge;
-
-    return {
-      success: true,
-      shipping_cost: totalShippingCost,
-      courier_name: cheapestCourier.courier_name,
-      courier_company_id: cheapestCourier.courier_company_id,
-      estimated_days: cheapestCourier.estimated_delivery_days,
-    };
-
-  } catch (error: unknown) {
-    const errorMessage = error instanceof Error ? error.message : "Unknown error";
-    console.error("[SHIPPING_RATE] Error calculating rate:", errorMessage);
-    
-    // Per Phase 3.1: If Shiprocket API fails, set shipping_cost = 0 and continue silently
-    return {
-      success: false,
-      shipping_cost: 0,
-      error: errorMessage,
-    };
   }
+
+  // Should not reach here, but return failure if we do
+  return {
+    success: false,
+    shipping_cost: 0,
+    error: "Rate calculation failed after retries",
+  };
 }
 
 /**
@@ -166,7 +220,7 @@ export async function calculateShippingRate(
  */
 export async function getAllShippingRates(
   deliveryPincode: string,
-  weight: number = getDefaultWeight(),
+  weight?: number,
   dimensions?: { length: number; breadth: number; height: number }
 ): Promise<{
   success: boolean;
@@ -178,7 +232,8 @@ export async function getAllShippingRates(
   }>;
   error?: string;
 }> {
-  if (!deliveryPincode || !/^\d{6}$/.test(deliveryPincode)) {
+  const cleanPincode = (deliveryPincode || "").replace(/\D/g, "");
+  if (!cleanPincode || !/^\d{6}$/.test(cleanPincode)) {
     return {
       success: false,
       couriers: [],
@@ -186,75 +241,122 @@ export async function getAllShippingRates(
     };
   }
 
-  // Phase 3.4: Always use global default dimensions
-  const dims = dimensions || getDefaultDimensions();
+  // Use global defaults from config
+  const shipmentWeight = weight || getDefaultWeight();
+  const shipmentDimensions = dimensions || getDefaultDimensions();
 
-  try {
-    const token = await authenticate();
+  let token: string;
+  let retryCount = 0;
+  const maxRetries = 2;
 
-    const params = new URLSearchParams({
-      pickup_postcode: DEFAULT_PICKUP_PINCODE,
-      delivery_postcode: deliveryPincode,
-      weight: weight.toString(),
-      length: dims.length.toString(),
-      breadth: dims.breadth.toString(),
-      height: dims.height.toString(),
-      cod: "0",
-    });
+  while (retryCount < maxRetries) {
+    try {
+      token = await authenticate();
 
-    const response = await fetch(
-      `${SHIPROCKET_BASE_URL}/external/courier/serviceability/?${params.toString()}`,
-      {
-        method: "GET",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${token}`,
-        },
+      const params = new URLSearchParams({
+        pickup_postcode: DEFAULT_PICKUP_PINCODE,
+        delivery_postcode: cleanPincode,
+        weight: shipmentWeight.toString(),
+        length: shipmentDimensions.length.toString(),
+        breadth: shipmentDimensions.breadth.toString(),
+        height: shipmentDimensions.height.toString(),
+        cod: "0",
+      });
+
+      const response = await fetch(
+        `${SHIPROCKET_BASE_URL}/external/courier/serviceability/?${params.toString()}`,
+        {
+          method: "GET",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${token}`,
+          },
+        }
+      );
+
+      // Handle 401 - token expired, refresh and retry ONCE
+      if (response.status === 401 && retryCount < maxRetries - 1) {
+        console.warn("[SHIPPING_ALL_RATES_401]", {
+          pincode: cleanPincode,
+          action: "Forcing token refresh and retrying",
+          timestamp: new Date().toISOString(),
+        });
+        await forceTokenRefresh();
+        retryCount++;
+        continue;
       }
-    );
 
-    if (!response.ok) {
+      if (!response.ok) {
+        console.error("[SHIPPING_ALL_RATES_API_ERROR]", {
+          pincode: cleanPincode,
+          status: response.status,
+          timestamp: new Date().toISOString(),
+        });
+        return {
+          success: false,
+          couriers: [],
+          error: `API returned ${response.status}`,
+        };
+      }
+
+      const data: RateApiResponse = await response.json();
+
+      if (!data.data?.available_courier_companies?.length) {
+        return {
+          success: false,
+          couriers: [],
+          error: "No couriers available",
+        };
+      }
+
+      const couriers = data.data.available_courier_companies.map((c) => ({
+        courier_name: c.courier_name,
+        courier_company_id: c.courier_company_id,
+        shipping_cost: c.freight_charge || c.rate || 0,
+        estimated_days: c.estimated_delivery_days,
+      }));
+
+      // Sort by cost (cheapest first)
+      couriers.sort((a, b) => a.shipping_cost - b.shipping_cost);
+
+      return {
+        success: true,
+        couriers,
+      };
+
+    } catch (error: unknown) {
+      const errorMessage = error instanceof Error ? error.message : "Unknown error";
+      
+      // If it's a 401 error and we haven't exhausted retries, continue
+      if (errorMessage.includes("401") && retryCount < maxRetries - 1) {
+        console.warn("[SHIPPING_ALL_RATES_401_CAUGHT]", {
+          pincode: cleanPincode,
+          retry_count: retryCount,
+          timestamp: new Date().toISOString(),
+        });
+        await forceTokenRefresh();
+        retryCount++;
+        continue;
+      }
+      
+      console.error("[SHIPPING_ALL_RATES_ERROR]", {
+        pincode: cleanPincode,
+        error: errorMessage,
+        timestamp: new Date().toISOString(),
+      });
+      
       return {
         success: false,
         couriers: [],
-        error: `API returned ${response.status}`,
+        error: errorMessage,
       };
     }
-
-    const data: RateApiResponse = await response.json();
-
-    if (!data.data?.available_courier_companies?.length) {
-      return {
-        success: false,
-        couriers: [],
-        error: "No couriers available",
-      };
-    }
-
-    const couriers = data.data.available_courier_companies.map((c) => ({
-      courier_name: c.courier_name,
-      courier_company_id: c.courier_company_id,
-      shipping_cost: c.freight_charge || c.rate || 0,
-      estimated_days: c.estimated_delivery_days,
-    }));
-
-    // Sort by cost (cheapest first)
-    couriers.sort((a, b) => a.shipping_cost - b.shipping_cost);
-
-    return {
-      success: true,
-      couriers,
-    };
-
-  } catch (error: unknown) {
-    const errorMessage = error instanceof Error ? error.message : "Unknown error";
-    return {
-      success: false,
-      couriers: [],
-      error: errorMessage,
-    };
   }
+
+  // Should not reach here, but return failure if we do
+  return {
+    success: false,
+    couriers: [],
+    error: "Rate calculation failed after retries",
+  };
 }
-
-
-

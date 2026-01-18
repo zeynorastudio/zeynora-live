@@ -169,7 +169,9 @@ export async function POST(req: NextRequest) {
       console.log("[SMOKE TEST] Shipment creation succeeded:", {
         order_id: orderId,
         shipment_id: result.shipment_id,
+        awb_code: result.awb_code,
         courier_name: result.courier_name,
+        internal_shipping_cost: result.internal_shipping_cost,
         already_exists: result.already_exists,
       });
 
@@ -179,7 +181,9 @@ export async function POST(req: NextRequest) {
           order_id: orderId,
           shipment_created: true,
           shipment_id: result.shipment_id,
+          awb_code: result.awb_code,
           courier_name: result.courier_name,
+          internal_shipping_cost: result.internal_shipping_cost,
           already_exists: result.already_exists || false,
         },
         { status: 200 }

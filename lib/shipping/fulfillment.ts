@@ -1,6 +1,14 @@
 /**
- * Fulfillment Orchestrator
- * Computes weights, selects packaging, builds Shiprocket payload, and handles responses
+ * FINAL — Fulfillment Orchestrator
+ * 
+ * Builds Shiprocket payload, handles responses, manages shipment lifecycle
+ * 
+ * Key behaviors:
+ * - Uses ENV-based weight/dimensions (never hardcoded)
+ * - Uses SHIPROCKET_PICKUP_LOCATION from env
+ * - Validates all required fields before submission
+ * - On success: saves shipment_id, awb_code, status = "BOOKED"
+ * - On failure: saves error, status = "FAILED", allows retry
  */
 
 import { createServiceRoleClient } from "@/lib/supabase/server";
@@ -11,11 +19,12 @@ import {
   ShiprocketOrderPayload,
   ShiprocketOrderResponse,
 } from "./shiprocket-client";
-import { getDefaultWeight, getDefaultDimensions } from "./config";
-import { LOGISTICS_DEFAULTS } from "./logistics-defaults";
-
-// Phase 3.4: Use global default weight and dimensions
-// Do NOT use product/variant metadata - always use global defaults
+import { 
+  getDefaultWeight, 
+  getDefaultDimensions, 
+  getPickupLocation,
+  isPackageConfigValid 
+} from "./config";
 
 interface OrderWithItems {
   id: string;
@@ -25,7 +34,7 @@ interface OrderWithItems {
   billing_address_id: string | null;
   payment_status: string | null;
   payment_provider: string | null;
-  metadata: any;
+  metadata: Record<string, unknown> | null;
   shiprocket_shipment_id: string | null;
   created_at: string;
 }
@@ -38,18 +47,6 @@ interface OrderItem {
   name: string | null;
   quantity: number;
   price: number;
-}
-
-interface ProductVariant {
-  id: string;
-  sku: string;
-  metadata: any;
-}
-
-interface Product {
-  uid: string;
-  name: string;
-  metadata: any;
 }
 
 interface Address {
@@ -68,31 +65,157 @@ interface FulfillmentPayload {
   chargeableWeight: number;
   packageDimensions: { length: number; breadth: number; height: number };
   shiprocketPayload: ShiprocketOrderPayload;
-  fallbackUsed: boolean;
 }
 
 /**
- * Phase 3.4: Always return global default weight
- * Do NOT check product/variant metadata
+ * Validate phone number format for Shiprocket
+ * Shiprocket requires 10-digit Indian phone number
  */
-function getItemWeight(
-  product: Product | null,
-  variant: ProductVariant | null
-): number {
-  // Phase 3.4: Always use global default, ignore product data
-  return getDefaultWeight();
+function validatePhone(phone: string | null): string {
+  if (!phone) return "";
+  // Remove all non-digits
+  const digits = phone.replace(/\D/g, "");
+  // If starts with 91 and has 12 digits, remove country code
+  if (digits.length === 12 && digits.startsWith("91")) {
+    return digits.slice(2);
+  }
+  // Return last 10 digits
+  return digits.slice(-10);
 }
 
 /**
- * Phase 3.4: Always return global default dimensions
- * Do NOT check product/variant metadata
+ * Validate pincode format
+ * Must be exactly 6 digits
  */
-function getItemDimensions(
-  product: Product | null,
-  variant: ProductVariant | null
-): { length: number; breadth: number; height: number } | null {
-  // Phase 3.4: Always use global default, ignore product data
-  return getDefaultDimensions();
+function validatePincode(pincode: string | null): string {
+  if (!pincode) return "";
+  const digits = pincode.replace(/\D/g, "");
+  if (digits.length !== 6) {
+    console.warn("[FULFILLMENT] Invalid pincode format:", pincode);
+  }
+  return digits.slice(0, 6);
+}
+
+/**
+ * Validate address is complete for Shiprocket
+ */
+function validateAddress(address: Address): { valid: boolean; errors: string[] } {
+  const errors: string[] = [];
+  
+  if (!address.line1?.trim()) errors.push("Address line 1 is required");
+  if (!address.city?.trim()) errors.push("City is required");
+  if (!address.state?.trim()) errors.push("State is required");
+  if (!address.pincode || !/^\d{6}$/.test(address.pincode.replace(/\D/g, ""))) {
+    errors.push("Valid 6-digit pincode is required");
+  }
+  if (!address.phone || validatePhone(address.phone).length < 10) {
+    errors.push("Valid 10-digit phone number is required");
+  }
+
+  return {
+    valid: errors.length === 0,
+    errors,
+  };
+}
+
+/**
+ * Payload validation result
+ */
+export interface PayloadValidationResult {
+  valid: boolean;
+  errors: string[];
+}
+
+/**
+ * Validate Shiprocket payload before API call
+ * Ensures all required fields meet Shiprocket's requirements
+ * 
+ * Validates:
+ * - phone matches /^\d{10}$/
+ * - pincode matches /^\d{6}$/
+ * - weight > 0
+ * - length > 0, breadth > 0, height > 0
+ * - pickup_location not empty
+ * - order_items.length > 0
+ */
+export function validateShiprocketPayload(payload: ShiprocketOrderPayload): PayloadValidationResult {
+  const errors: string[] = [];
+
+  // Validate phone (10 digits)
+  if (!payload.shipping_phone || !/^\d{10}$/.test(payload.shipping_phone)) {
+    errors.push(`Invalid shipping phone: must be exactly 10 digits, got "${payload.shipping_phone || "empty"}"`);
+  }
+  if (!payload.billing_phone || !/^\d{10}$/.test(payload.billing_phone)) {
+    errors.push(`Invalid billing phone: must be exactly 10 digits, got "${payload.billing_phone || "empty"}"`);
+  }
+
+  // Validate pincode (6 digits)
+  if (!payload.shipping_pincode || !/^\d{6}$/.test(payload.shipping_pincode)) {
+    errors.push(`Invalid shipping pincode: must be exactly 6 digits, got "${payload.shipping_pincode || "empty"}"`);
+  }
+  if (!payload.billing_pincode || !/^\d{6}$/.test(payload.billing_pincode)) {
+    errors.push(`Invalid billing pincode: must be exactly 6 digits, got "${payload.billing_pincode || "empty"}"`);
+  }
+
+  // Validate weight > 0
+  if (!payload.weight || payload.weight <= 0) {
+    errors.push(`Invalid weight: must be greater than 0, got ${payload.weight}`);
+  }
+
+  // Validate dimensions > 0
+  if (!payload.length || payload.length <= 0) {
+    errors.push(`Invalid length: must be greater than 0, got ${payload.length}`);
+  }
+  if (!payload.breadth || payload.breadth <= 0) {
+    errors.push(`Invalid breadth: must be greater than 0, got ${payload.breadth}`);
+  }
+  if (!payload.height || payload.height <= 0) {
+    errors.push(`Invalid height: must be greater than 0, got ${payload.height}`);
+  }
+
+  // Validate pickup_location not empty
+  if (!payload.pickup_location || !payload.pickup_location.trim()) {
+    errors.push("Pickup location is required and cannot be empty");
+  }
+
+  // Validate order_items.length > 0
+  if (!payload.order_items || payload.order_items.length === 0) {
+    errors.push("Order must have at least one item");
+  }
+
+  // Validate each order item
+  if (payload.order_items && payload.order_items.length > 0) {
+    payload.order_items.forEach((item, index) => {
+      if (!item.name || !item.name.trim()) {
+        errors.push(`Item ${index + 1}: name is required`);
+      }
+      if (!item.sku || !item.sku.trim()) {
+        errors.push(`Item ${index + 1}: SKU is required`);
+      }
+      if (!item.units || item.units <= 0) {
+        errors.push(`Item ${index + 1}: units must be greater than 0`);
+      }
+      if (item.selling_price === undefined || item.selling_price < 0) {
+        errors.push(`Item ${index + 1}: selling_price must be 0 or greater`);
+      }
+    });
+  }
+
+  // Validate required address fields
+  if (!payload.shipping_address || !payload.shipping_address.trim()) {
+    errors.push("Shipping address is required");
+  }
+  if (!payload.shipping_city || !payload.shipping_city.trim()) {
+    errors.push("Shipping city is required");
+  }
+  if (!payload.shipping_state || !payload.shipping_state.trim()) {
+    errors.push("Shipping state is required");
+  }
+
+  return {
+    valid: errors.length === 0,
+    errors,
+  };
 }
 
 /**
@@ -110,12 +233,8 @@ function computeChargeableWeight(
 }
 
 /**
- * Phase 3.4: Removed selectPackagingBox function
- * Always use global default dimensions directly
- */
-
-/**
  * Prepare fulfillment payload for Shiprocket
+ * Uses ENV-based defaults for weight/dimensions
  */
 export async function prepareFulfillmentPayload(
   order: OrderWithItems,
@@ -125,105 +244,103 @@ export async function prepareFulfillmentPayload(
 ): Promise<FulfillmentPayload> {
   const supabase = createServiceRoleClient();
 
-  // Fetch product and variant details
-  const productUids = [...new Set(orderItems.map((item) => item.product_uid))];
-  const variantIds = orderItems
-    .map((item) => item.variant_id)
-    .filter(Boolean) as string[];
+  // Validate package configuration
+  if (!isPackageConfigValid()) {
+    console.error("[FULFILLMENT] Invalid package configuration - check env vars");
+  }
 
-  const { data: products } = await supabase
-    .from("products")
-    .select("uid, name, metadata")
-    .in("uid", productUids);
-
-  const { data: variants } = await supabase
-    .from("product_variants")
-    .select("id, sku, metadata")
-    .in("id", variantIds);
-
-  const typedProductsForMap = (products || []) as Array<{ uid: string; name?: string }>;
-  const typedVariants = (variants || []) as Array<{ id: string }>;
-  const productsMap = new Map(typedProductsForMap.map((p) => [p.uid, p]));
-  const variantsMap = new Map(typedVariants.map((v) => [v.id, v]));
-
-  // STEP 5: Use logistics defaults (env-based with safe fallbacks)
-  // Apply weight & dimensions at SHIPMENT LEVEL
-  // Do NOT attempt per-product calculation
-  // Ensure dimensions and weight are always set (never zero, never undefined)
-  const packageDimensions = {
-    length: LOGISTICS_DEFAULTS.lengthCm || 16, // STEP 5: Hard fallback
-    breadth: LOGISTICS_DEFAULTS.breadthCm || 13, // STEP 5: Hard fallback
-    height: LOGISTICS_DEFAULTS.heightCm || 4, // STEP 5: Hard fallback
-  };
-  
-  // Total weight is the default weight (regardless of quantity)
-  // Single global weight per shipment
-  // STEP 5: Ensure weight is always set (never zero, never undefined)
-  const totalPhysicalWeight = LOGISTICS_DEFAULTS.weightKg || 1.5; // STEP 5: Hard fallback
-  
-  // Phase 3.4: No fallback flag needed - we always use global defaults
-  const fallbackUsed = false;
+  // Get ENV-based defaults (never hardcoded)
+  const packageWeight = getDefaultWeight();
+  const packageDimensions = getDefaultDimensions();
+  const pickupLocation = getPickupLocation();
 
   // Compute chargeable weight
-  const chargeableWeight = computeChargeableWeight(
-    totalPhysicalWeight,
-    packageDimensions
-  );
+  const chargeableWeight = computeChargeableWeight(packageWeight, packageDimensions);
 
-  // Build Shiprocket payload
+  // Validate shipping address
+  const addressValidation = validateAddress(shippingAddress);
+  if (!addressValidation.valid) {
+    console.warn("[FULFILLMENT] Address validation warnings:", addressValidation.errors);
+    // Continue anyway - Shiprocket will reject if truly invalid
+  }
+
+  // Fetch product names for items (for better order display in Shiprocket)
+  const productUids = [...new Set(orderItems.map((item) => item.product_uid))];
+  const { data: products } = await supabase
+    .from("products")
+    .select("uid, name")
+    .in("uid", productUids);
+
+  const productsMap = new Map((products || []).map((p: { uid: string; name?: string }) => [p.uid, p]));
+
+  // Build billing address (use shipping if not provided)
   const billAddr = billingAddress || shippingAddress;
+
+  // Build Shiprocket payload with all required fields
   const shiprocketPayload: ShiprocketOrderPayload = {
+    // Order identification
     order_id: order.order_number,
     order_date: new Date(order.created_at).toISOString().split("T")[0],
-    // STEP 4: Use SHIPROCKET_PICKUP_LOCATION env var (no hardcoded values)
-    pickup_location: process.env.SHIPROCKET_PICKUP_LOCATION || "Primary",
+    
+    // Pickup location from ENV
+    pickup_location: pickupLocation,
+    
+    // Billing details
     billing_customer_name: billAddr.full_name || "Customer",
     billing_address: billAddr.line1 || "",
     billing_address_2: billAddr.line2 || undefined,
     billing_city: billAddr.city || "",
-    billing_pincode: billAddr.pincode || "",
+    billing_pincode: validatePincode(billAddr.pincode),
     billing_state: billAddr.state || "",
     billing_country: billAddr.country || "India",
-    billing_email: "", // TODO: Get from user record
-    billing_phone: billAddr.phone || "",
-    shipping_is_billing: billingAddress?.id === shippingAddress.id,
+    billing_email: "", // Will be filled from customer record if available
+    billing_phone: validatePhone(billAddr.phone),
+    
+    // Shipping details
+    shipping_is_billing: billingAddress?.id === shippingAddress.id || !billingAddress,
     shipping_customer_name: shippingAddress.full_name || "Customer",
     shipping_address: shippingAddress.line1 || "",
     shipping_address_2: shippingAddress.line2 || undefined,
     shipping_city: shippingAddress.city || "",
-    shipping_pincode: shippingAddress.pincode || "",
+    shipping_pincode: validatePincode(shippingAddress.pincode),
     shipping_state: shippingAddress.state || "",
     shipping_country: shippingAddress.country || "India",
-    shipping_email: "", // TODO: Get from user record
-    shipping_phone: shippingAddress.phone || "",
+    shipping_email: "",
+    shipping_phone: validatePhone(shippingAddress.phone),
+    
+    // Order items
     order_items: orderItems.map((item) => {
       const product = productsMap.get(item.product_uid);
       return {
-        name: item.name || product?.name || "Product",
-        sku: item.sku || "UNKNOWN",
+        name: item.name || (product as { name?: string })?.name || "Product",
+        sku: item.sku || `SKU-${item.id.substring(0, 8)}`,
         units: item.quantity,
         selling_price: item.price,
       };
     }),
-    payment_method: order.payment_status === "paid" ? "Prepaid" : "COD",
+    
+    // Payment method (always Prepaid since we only ship after payment)
+    payment_method: "Prepaid",
+    
+    // Totals
     sub_total: orderItems.reduce((sum, item) => sum + item.price * item.quantity, 0),
-    // STEP 5: Ensure dimensions and weight are always set (never zero, never undefined)
-    length: packageDimensions.length || 16,
-    breadth: packageDimensions.breadth || 13,
-    height: packageDimensions.height || 4,
-    weight: chargeableWeight || 1.5,
+    
+    // Package dimensions from ENV
+    length: packageDimensions.length,
+    breadth: packageDimensions.breadth,
+    height: packageDimensions.height,
+    weight: chargeableWeight,
   };
 
   return {
     chargeableWeight,
     packageDimensions,
     shiprocketPayload,
-    fallbackUsed,
   };
 }
 
 /**
- * Create Shiprocket order and request AWB
+ * Create Shiprocket order with retry
  */
 export async function createShiprocketOrderForFulfillment(
   order: OrderWithItems,
@@ -236,6 +353,8 @@ export async function createShiprocketOrderForFulfillment(
 
 /**
  * Handle Shiprocket response and persist to database
+ * On success: shipment_status = "BOOKED", saves awb_code
+ * On failure: shipment_status = "FAILED"
  */
 export async function handleShiprocketResponse(
   orderId: string,
@@ -251,16 +370,16 @@ export async function handleShiprocketResponse(
     .eq("id", orderId)
     .single();
 
-  const typedOrderData = orderData as { metadata?: any } | null;
-  const existingMetadata = (typedOrderData?.metadata as Record<string, any>) || {};
-  const shippingMetadata = existingMetadata.shipping || {};
-  const shippingTimeline = existingMetadata.shipping_timeline || [];
+  const existingMetadata = ((orderData as { metadata?: Record<string, unknown> } | null)?.metadata as Record<string, unknown>) || {};
+  const shippingMetadata = (existingMetadata.shipping as Record<string, unknown>) || {};
+  const shippingTimeline = (existingMetadata.shipping_timeline as unknown[]) || [];
 
   const updatedMetadata = {
     ...existingMetadata,
     shipping: {
       ...shippingMetadata,
       awb: response.awb_code || null,
+      awb_code: response.awb_code || null, // Duplicate for consistency
       courier: response.courier_name || null,
       courier_company_id: response.courier_company_id || null,
       tracking_url: response.tracking_url || null,
@@ -268,7 +387,7 @@ export async function handleShiprocketResponse(
       shipment_id: response.shipment_id,
       updated_at: new Date().toISOString(),
     },
-    shiprocket_payload: response,
+    shiprocket_response: response,
     package_weight_kg: fulfillmentPayload.chargeableWeight,
     package_length_cm: fulfillmentPayload.packageDimensions.length,
     package_breadth_cm: fulfillmentPayload.packageDimensions.breadth,
@@ -276,21 +395,21 @@ export async function handleShiprocketResponse(
     shipping_timeline: [
       ...shippingTimeline,
       {
-        status: response.awb_code ? "shipped" : "processing",
+        status: "BOOKED",
         timestamp: new Date().toISOString(),
         awb: response.awb_code || null,
         courier: response.courier_name || null,
-        notes: fulfillmentPayload.fallbackUsed
-          ? "Used fallback weight/dimensions"
-          : null,
+        shipment_id: response.shipment_id,
       },
     ],
   };
 
-  // Update order
+  // Update order with BOOKED status
   const { error: updateError } = await supabase.from("orders").update({
     shiprocket_shipment_id: String(response.shipment_id),
+    shipment_status: "BOOKED", // Success status
     shipping_status: response.awb_code ? "shipped" : "processing",
+    courier_name: response.courier_name || null,
     metadata: updatedMetadata,
     updated_at: new Date().toISOString(),
   } as unknown as never).eq("id", orderId);
@@ -305,31 +424,93 @@ export async function handleShiprocketResponse(
   // Write audit log
   try {
     await supabase.from("admin_audit_logs").insert({
-      action: "shiprocket_order_created",
+      action: "shipment_booked",
       target_resource: "orders",
       target_id: orderId,
       details: {
         shipment_id: response.shipment_id,
         awb_code: response.awb_code,
         courier_name: response.courier_name,
-        fallback_used: fulfillmentPayload.fallbackUsed,
+        weight_kg: fulfillmentPayload.chargeableWeight,
       },
     } as unknown as never);
   } catch (auditError) {
-    const auditErrorMessage = auditError instanceof Error ? auditError.message : "Unknown error";
-    console.error("[FULFILLMENT] Audit log write failed (non-fatal):", {
-      order_id: orderId,
-      audit_error: auditErrorMessage,
-    });
+    console.warn("[FULFILLMENT] Audit log write failed (non-fatal)");
+  }
+}
+
+/**
+ * Mark order as fulfillment failed
+ * Saves error message and allows retry
+ */
+async function markFulfillmentFailed(
+  orderId: string,
+  orderNumber: string,
+  errorMessage: string,
+  errorDetails?: unknown
+): Promise<void> {
+  const supabase = createServiceRoleClient();
+
+  // Fetch current metadata
+  const { data: orderData } = await supabase
+    .from("orders")
+    .select("metadata")
+    .eq("id", orderId)
+    .single();
+
+  const existingMetadata = ((orderData as { metadata?: Record<string, unknown> } | null)?.metadata as Record<string, unknown>) || {};
+  const shippingTimeline = (existingMetadata.shipping_timeline as unknown[]) || [];
+
+  const updatedMetadata = {
+    ...existingMetadata,
+    shipment_error: errorMessage,
+    shipment_error_details: errorDetails || null,
+    shipment_failed_at: new Date().toISOString(),
+    shipping_timeline: [
+      ...shippingTimeline,
+      {
+        status: "FAILED",
+        timestamp: new Date().toISOString(),
+        error: errorMessage,
+      },
+    ],
+  };
+
+  // Update order with FAILED status
+  await supabase
+    .from("orders")
+    .update({
+      shipment_status: "FAILED", // Failure status - allows retry
+      metadata: updatedMetadata,
+      updated_at: new Date().toISOString(),
+    } as unknown as never)
+    .eq("id", orderId);
+
+  // Write audit log
+  try {
+    await supabase.from("admin_audit_logs").insert({
+      action: "shipment_failed",
+      target_resource: "orders",
+      target_id: orderId,
+      details: {
+        order_number: orderNumber,
+        error: errorMessage,
+        requires_attention: true,
+      },
+    } as unknown as never);
+  } catch (auditError) {
+    console.warn("[FULFILLMENT] Audit log write failed (non-fatal)");
   }
 }
 
 /**
  * Safe wrapper to create AWB only if missing (idempotent)
+ * Main entry point for fulfillment
  */
 export async function safeCreateAWBIfMissing(orderId: string): Promise<{
   success: boolean;
   awb?: string;
+  shipment_id?: string;
   error?: string;
   alreadyExists?: boolean;
 }> {
@@ -339,7 +520,7 @@ export async function safeCreateAWBIfMissing(orderId: string): Promise<{
   const { data: orderData, error: orderError } = await supabase
     .from("orders")
     .select(
-      "id, order_number, user_id, shipping_address_id, billing_address_id, payment_status, payment_provider, metadata, shiprocket_shipment_id, created_at"
+      "id, order_number, user_id, shipping_address_id, billing_address_id, payment_status, payment_provider, metadata, shiprocket_shipment_id, shipment_status, created_at"
     )
     .eq("id", orderId)
     .single();
@@ -352,20 +533,35 @@ export async function safeCreateAWBIfMissing(orderId: string): Promise<{
     return { success: false, error: "Order not found" };
   }
 
-  const order = orderData as OrderWithItems;
+  const order = orderData as OrderWithItems & { shipment_status?: string | null };
 
-  // Check if already fulfilled
-  const metadata = (order.metadata as Record<string, any>) || {};
-  const shippingMetadata = metadata.shipping || {};
-  const existingAWB = shippingMetadata.awb || null;
+  // Check if already fulfilled successfully (not FAILED)
+  const metadata = (order.metadata as Record<string, unknown>) || {};
+  const shippingMetadata = (metadata.shipping as Record<string, unknown>) || {};
+  const existingAWB = (shippingMetadata.awb as string) || null;
   const existingShipmentId = order.shiprocket_shipment_id;
 
-  if (existingAWB && existingShipmentId) {
+  // Idempotency: if BOOKED with AWB, return existing
+  if (existingAWB && existingShipmentId && order.shipment_status !== "FAILED") {
     return {
       success: true,
       awb: existingAWB,
+      shipment_id: existingShipmentId,
       alreadyExists: true,
     };
+  }
+
+  // Allow retry if status is FAILED or PENDING
+  if (order.shipment_status && !["FAILED", "PENDING", null].includes(order.shipment_status)) {
+    // Already in progress or booked
+    if (existingShipmentId) {
+      return {
+        success: true,
+        shipment_id: existingShipmentId,
+        awb: existingAWB || undefined,
+        alreadyExists: true,
+      };
+    }
   }
 
   // Check payment status
@@ -409,7 +605,9 @@ export async function safeCreateAWBIfMissing(orderId: string): Promise<{
   }
 
   try {
-    // Prepare fulfillment payload
+    console.log("[FULFILLMENT] Creating shipment for order:", order.order_number);
+
+    // Prepare fulfillment payload (uses ENV-based defaults)
     const fulfillmentPayload = await prepareFulfillmentPayload(
       order,
       orderItems as OrderItem[],
@@ -417,13 +615,53 @@ export async function safeCreateAWBIfMissing(orderId: string): Promise<{
       billingAddress as Address | null
     );
 
+    // STEP: Validate payload BEFORE calling Shiprocket API
+    const payloadValidation = validateShiprocketPayload(fulfillmentPayload.shiprocketPayload);
+    
+    if (!payloadValidation.valid) {
+      const errorMsg = `Invalid payload: ${payloadValidation.errors.join("; ")}`;
+      
+      console.error("[SHIPMENT_PAYLOAD_INVALID]", {
+        order_id: orderId,
+        order_number: order.order_number,
+        errors: payloadValidation.errors,
+        timestamp: new Date().toISOString(),
+      });
+
+      // Mark as FAILED with validation error
+      await markFulfillmentFailed(orderId, order.order_number, errorMsg, {
+        validation_errors: payloadValidation.errors,
+      });
+
+      return {
+        success: false,
+        error: errorMsg,
+      };
+    }
+
+    // Log valid payload for debugging
+    console.log("[SHIPMENT_PAYLOAD_VALID]", {
+      order_number: order.order_number,
+      weight: fulfillmentPayload.chargeableWeight,
+      dimensions: fulfillmentPayload.packageDimensions,
+      pickup_location: fulfillmentPayload.shiprocketPayload.pickup_location,
+      timestamp: new Date().toISOString(),
+    });
+
     // Create Shiprocket order
     const response = await createShiprocketOrderForFulfillment(
       order,
       fulfillmentPayload.shiprocketPayload
     );
 
-    // Handle response
+    console.log("[FULFILLMENT] Shiprocket response:", {
+      order_number: order.order_number,
+      shipment_id: response.shipment_id,
+      awb_code: response.awb_code,
+      status: response.status,
+    });
+
+    // Handle success response
     await handleShiprocketResponse(orderId, response, fulfillmentPayload);
 
     // Send shipping notification email if AWB was generated
@@ -446,54 +684,30 @@ export async function safeCreateAWBIfMissing(orderId: string): Promise<{
         );
 
         if (!notificationResponse.ok) {
-          console.warn("[FULFILLMENT] Shipping notification email failed:", {
-            order_id: orderId,
-            status: notificationResponse.status,
-          });
+          console.warn("[FULFILLMENT] Shipping notification email failed");
         }
       } catch (emailError) {
         // Don't fail fulfillment if email fails
-        console.error("[FULFILLMENT] Failed to send shipping notification:", {
-          order_id: orderId,
-          error: emailError instanceof Error ? emailError.message : "Unknown error",
-        });
+        console.warn("[FULFILLMENT] Failed to send shipping notification (non-fatal)");
       }
     }
 
     return {
       success: true,
       awb: response.awb_code || undefined,
+      shipment_id: String(response.shipment_id),
     };
   } catch (error: unknown) {
     const errorMessage = error instanceof Error ? error.message : "Unknown error";
-    const errorStack = error instanceof Error ? error.stack : undefined;
     
-    console.error("[FULFILLMENT] Shiprocket fulfillment failed:", {
+    console.error("[FULFILLMENT] Shipment creation failed:", {
       order_id: orderId,
       order_number: order.order_number,
-      user_id: order.user_id,
       error: errorMessage,
     });
 
-    // Write error to audit log
-    try {
-      await supabase.from("admin_audit_logs").insert({
-        action: "fulfillment_failed",
-        target_resource: "orders",
-        target_id: orderId,
-        details: {
-          order_number: order.order_number,
-          error: errorMessage,
-          stack: errorStack,
-        },
-      } as unknown as never);
-    } catch (auditError) {
-      const auditErrorMessage = auditError instanceof Error ? auditError.message : "Unknown error";
-      console.error("[FULFILLMENT] Audit log write failed (non-fatal):", {
-        order_id: orderId,
-        audit_error: auditErrorMessage,
-      });
-    }
+    // Mark as FAILED (allows retry)
+    await markFulfillmentFailed(orderId, order.order_number, errorMessage, error);
 
     return {
       success: false,
@@ -501,10 +715,3 @@ export async function safeCreateAWBIfMissing(orderId: string): Promise<{
     };
   }
 }
-
-
-
-
-
-
-
