@@ -286,6 +286,9 @@ export async function prepareFulfillmentPayload(
   // Build billing address (use shipping if not provided)
   const billAddr = billingAddress || shippingAddress;
 
+  // Get email from order.shipping_email (preferred) or fallback to empty string
+  const orderEmail = order.shipping_email || "";
+
   // Build Shiprocket payload with all required fields
   const shiprocketPayload: ShiprocketOrderPayload = {
     // Order identification
@@ -303,7 +306,7 @@ export async function prepareFulfillmentPayload(
     billing_pincode: validatePincode(billAddr.pincode),
     billing_state: billAddr.state || "",
     billing_country: billAddr.country || "India",
-    billing_email: "", // Will be filled from customer record if available
+    billing_email: orderEmail, // Use order.shipping_email
     billing_phone: validatePhone(billAddr.phone),
     
     // Shipping details
@@ -315,7 +318,7 @@ export async function prepareFulfillmentPayload(
     shipping_pincode: validatePincode(shippingAddress.pincode),
     shipping_state: shippingAddress.state || "",
     shipping_country: shippingAddress.country || "India",
-    shipping_email: "",
+    shipping_email: orderEmail, // Use order.shipping_email
     shipping_phone: validatePhone(shippingAddress.phone),
     
     // Order items
@@ -647,7 +650,7 @@ export async function safeCreateAWBIfMissing(orderId: string): Promise<{
       .eq("id", billingAddressId)
       .single();
 
-    billingAddress = (fetchedBillingAddress as Address) || null;
+    billingAddress = fetchedBillingAddress ? (fetchedBillingAddress as unknown as Address) : null;
   } else {
     // No shipping address at all
     console.error("[FULFILLMENT_MISSING_SHIPPING_ADDRESS]", {
