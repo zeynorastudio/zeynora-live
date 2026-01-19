@@ -14,8 +14,10 @@ import { createServiceRoleClient } from "@/lib/supabase/server";
 // Environment configuration - direct URLs, no duplicate building
 const SHIPROCKET_BASE_URL = process.env.SHIPROCKET_BASE_URL || "https://apiv2.shiprocket.in/v1";
 const SHIPROCKET_AUTH_URL = process.env.SHIPROCKET_AUTH_URL || `${SHIPROCKET_BASE_URL}/external/auth/login`;
+const SHIPROCKET_ORDER_CREATE_URL = process.env.SHIPROCKET_ORDER_CREATE_URL || `${SHIPROCKET_BASE_URL}/external/orders/create/adhoc`;
 const SHIPROCKET_EMAIL = process.env.SHIPROCKET_EMAIL;
 const SHIPROCKET_PASSWORD = process.env.SHIPROCKET_PASSWORD;
+const SHIPROCKET_PICKUP_LOCATION = process.env.SHIPROCKET_PICKUP_LOCATION;
 
 // In-memory token cache for same-process reuse (fallback if DB unavailable)
 let cachedToken: { token: string; expiresAt: number } | null = null;
@@ -98,6 +100,25 @@ function isCachedTokenValid(): boolean {
 }
 
 /**
+ * Validate all required Shiprocket environment variables
+ * Returns validation result with missing variables list
+ */
+export function validateShiprocketEnv(): { valid: boolean; missing: string[] } {
+  const missing: string[] = [];
+  
+  if (!SHIPROCKET_AUTH_URL) missing.push("SHIPROCKET_AUTH_URL");
+  if (!SHIPROCKET_ORDER_CREATE_URL) missing.push("SHIPROCKET_ORDER_CREATE_URL");
+  if (!SHIPROCKET_EMAIL) missing.push("SHIPROCKET_EMAIL");
+  if (!SHIPROCKET_PASSWORD) missing.push("SHIPROCKET_PASSWORD");
+  if (!SHIPROCKET_PICKUP_LOCATION) missing.push("SHIPROCKET_PICKUP_LOCATION");
+  
+  return {
+    valid: missing.length === 0,
+    missing,
+  };
+}
+
+/**
  * Get valid Shiprocket token - auto-refresh if expired
  * 
  * Flow:
@@ -139,10 +160,15 @@ export async function authenticate(): Promise<string> {
   }
 
   // Step 3: Token expired or doesn't exist - regenerate
-  if (!SHIPROCKET_EMAIL || !SHIPROCKET_PASSWORD) {
-    console.error("[SHIPROCKET_AUTH_FAIL] Missing credentials");
+  // Validate ENV before proceeding
+  const envValidation = validateShiprocketEnv();
+  if (!envValidation.valid) {
+    console.error("[SHIPROCKET_ENV_MISSING]", {
+      missing: envValidation.missing,
+      timestamp: new Date().toISOString(),
+    });
     throw new Error(
-      "Shiprocket credentials missing. Set SHIPROCKET_EMAIL and SHIPROCKET_PASSWORD environment variables."
+      `Shiprocket environment variables missing: ${envValidation.missing.join(", ")}`
     );
   }
 
@@ -298,7 +324,8 @@ export async function createShiprocketOrder(
 
   while (retryCount < maxRetries) {
     try {
-      const response = await fetch(`${SHIPROCKET_BASE_URL}/external/orders/create/adhoc`, {
+      // Use SHIPROCKET_ORDER_CREATE_URL directly from ENV - never build URL
+      const response = await fetch(SHIPROCKET_ORDER_CREATE_URL, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",

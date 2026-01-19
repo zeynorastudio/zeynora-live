@@ -163,37 +163,65 @@ async function decrementStockForOrder(orderId: string): Promise<{
 
 /**
  * Calculate and store internal shipping cost for order
+ * Reads shipping pincode from order.shipping_pincode (preferred) or addresses table (fallback)
  */
 async function calculateAndStoreShippingCost(orderId: string): Promise<number> {
   const supabase = createServiceRoleClient();
 
   try {
-    // Get shipping address pincode
+    // Get shipping pincode - prefer order.shipping_pincode, fallback to addresses table
     const { data: orderData } = await supabase
       .from("orders")
-      .select("shipping_address_id, metadata")
+      .select("shipping_pincode, shipping_address_id, metadata")
       .eq("id", orderId)
       .single();
 
-    if (!orderData || !(orderData as { shipping_address_id: string | null }).shipping_address_id) {
-      console.warn("[SHIPPING_COST] No shipping address for order:", orderId);
+    if (!orderData) {
+      console.error("[SHIPPING_COST] Order not found:", orderId);
       return 0;
     }
 
-    const { data: address } = await supabase
-      .from("addresses")
-      .select("pincode")
-      .eq("id", (orderData as { shipping_address_id: string }).shipping_address_id)
-      .single();
+    let pincode: string | null = null;
 
-    if (!address || !(address as { pincode: string | null }).pincode) {
-      console.warn("[SHIPPING_COST] No pincode for order:", orderId);
-      return 0;
+    // STEP 1: Try order.shipping_pincode first (preferred)
+    const typedOrderData = orderData as {
+      shipping_pincode: string | null;
+      shipping_address_id: string | null;
+      metadata: Record<string, unknown> | null;
+    };
+
+    if (typedOrderData.shipping_pincode) {
+      pincode = typedOrderData.shipping_pincode.replace(/\D/g, "");
+      if (/^\d{6}$/.test(pincode)) {
+        // Valid pincode from order record
+      } else {
+        pincode = null; // Invalid format, try fallback
+      }
     }
 
-    const pincode = ((address as { pincode: string }).pincode || "").replace(/\D/g, "");
-    if (!/^\d{6}$/.test(pincode)) {
-      console.warn("[SHIPPING_COST] Invalid pincode:", pincode);
+    // STEP 2: Fallback to addresses table if order.shipping_pincode not available
+    if (!pincode && typedOrderData.shipping_address_id) {
+      const { data: address } = await supabase
+        .from("addresses")
+        .select("pincode")
+        .eq("id", typedOrderData.shipping_address_id)
+        .single();
+
+      if (address && (address as { pincode: string | null }).pincode) {
+        pincode = ((address as { pincode: string }).pincode || "").replace(/\D/g, "");
+        if (!/^\d{6}$/.test(pincode)) {
+          pincode = null; // Invalid format
+        }
+      }
+    }
+
+    // STEP 3: Validate pincode
+    if (!pincode || !/^\d{6}$/.test(pincode)) {
+      console.error("[SHIPPING_COST] No shipping address for order:", {
+        order_id: orderId,
+        has_shipping_pincode: !!typedOrderData.shipping_pincode,
+        has_shipping_address_id: !!typedOrderData.shipping_address_id,
+      });
       return 0;
     }
 

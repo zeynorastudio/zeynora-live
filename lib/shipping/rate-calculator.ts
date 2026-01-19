@@ -14,10 +14,11 @@
  * - estimated_days: Delivery estimate
  */
 
-import { authenticate, forceTokenRefresh } from "./shiprocket-client";
+import { authenticate, forceTokenRefresh, validateShiprocketEnv } from "./shiprocket-client";
 import { getDefaultWeight, getDefaultDimensions } from "./config";
 
-const SHIPROCKET_BASE_URL = process.env.SHIPROCKET_BASE_URL || "https://apiv2.shiprocket.in/v1";
+// Use SHIPROCKET_RATE_URL directly from ENV - never build URL
+const SHIPROCKET_RATE_URL = process.env.SHIPROCKET_RATE_URL || "https://apiv2.shiprocket.in/v1/external/courier/serviceability/";
 
 // Default pickup pincode (warehouse location)
 const DEFAULT_PICKUP_PINCODE = process.env.SHIPROCKET_PICKUP_PINCODE || "110001";
@@ -72,6 +73,20 @@ export async function calculateShippingRate(
   dimensions?: { length: number; breadth: number; height: number },
   codPayment: boolean = false
 ): Promise<ShippingRateResult> {
+  // Validate ENV before proceeding
+  const envValidation = validateShiprocketEnv();
+  if (!envValidation.valid) {
+    console.error("[SHIPROCKET_ENV_MISSING]", {
+      missing: envValidation.missing,
+      timestamp: new Date().toISOString(),
+    });
+    return {
+      success: false,
+      shipping_cost: 0,
+      error: `CONFIG_ERROR: Missing environment variables: ${envValidation.missing.join(", ")}`,
+    };
+  }
+
   // Validate pincode (6 digits)
   const cleanPincode = (deliveryPincode || "").replace(/\D/g, "");
   if (!cleanPincode || !/^\d{6}$/.test(cleanPincode)) {
@@ -95,8 +110,10 @@ export async function calculateShippingRate(
       // Authenticate with Shiprocket
       token = await authenticate();
 
-      // Build query parameters for rate API
-      const params = new URLSearchParams({
+      // Call Shiprocket Rate API - use SHIPROCKET_RATE_URL directly from ENV
+      const rateUrl = new URL(SHIPROCKET_RATE_URL);
+      // Append query params to the URL
+      Object.entries({
         pickup_postcode: DEFAULT_PICKUP_PINCODE,
         delivery_postcode: cleanPincode,
         weight: shipmentWeight.toString(),
@@ -104,19 +121,17 @@ export async function calculateShippingRate(
         breadth: shipmentDimensions.breadth.toString(),
         height: shipmentDimensions.height.toString(),
         cod: codPayment ? "1" : "0",
+      }).forEach(([key, value]) => {
+        rateUrl.searchParams.append(key, value);
       });
 
-      // Call Shiprocket Rate API
-      const response = await fetch(
-        `${SHIPROCKET_BASE_URL}/external/courier/serviceability/?${params.toString()}`,
-        {
-          method: "GET",
-          headers: {
-            "Content-Type": "application/json",
-            Authorization: `Bearer ${token}`,
-          },
-        }
-      );
+      const response = await fetch(rateUrl.toString(), {
+        method: "GET",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+      });
 
       // Handle 401 - token expired, refresh and retry ONCE
       if (response.status === 401 && retryCount < maxRetries - 1) {
@@ -253,7 +268,10 @@ export async function getAllShippingRates(
     try {
       token = await authenticate();
 
-      const params = new URLSearchParams({
+      // Call Shiprocket Rate API - use SHIPROCKET_RATE_URL directly from ENV
+      const rateUrl = new URL(SHIPROCKET_RATE_URL);
+      // Append query params to the URL
+      Object.entries({
         pickup_postcode: DEFAULT_PICKUP_PINCODE,
         delivery_postcode: cleanPincode,
         weight: shipmentWeight.toString(),
@@ -261,18 +279,17 @@ export async function getAllShippingRates(
         breadth: shipmentDimensions.breadth.toString(),
         height: shipmentDimensions.height.toString(),
         cod: "0",
+      }).forEach(([key, value]) => {
+        rateUrl.searchParams.append(key, value);
       });
 
-      const response = await fetch(
-        `${SHIPROCKET_BASE_URL}/external/courier/serviceability/?${params.toString()}`,
-        {
-          method: "GET",
-          headers: {
-            "Content-Type": "application/json",
-            Authorization: `Bearer ${token}`,
-          },
-        }
-      );
+      const response = await fetch(rateUrl.toString(), {
+        method: "GET",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+      });
 
       // Handle 401 - token expired, refresh and retry ONCE
       if (response.status === 401 && retryCount < maxRetries - 1) {

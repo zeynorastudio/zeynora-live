@@ -17,6 +17,7 @@ import {
   createShiprocketOrder,
   ShiprocketOrderPayload,
   ShiprocketOrderResponse,
+  validateShiprocketEnv,
 } from "./shiprocket-client";
 import { prepareFulfillmentPayload, validateShiprocketPayload } from "./fulfillment";
 import { calculateShippingRate } from "./rate-calculator";
@@ -146,6 +147,41 @@ export async function createShipmentForPaidOrder(
     return { success: false, error: errorMessage };
   }
 
+  // STEP: Validate ENV before proceeding
+  const envValidation = validateShiprocketEnv();
+  if (!envValidation.valid) {
+    const errorMessage = `CONFIG_ERROR: Missing environment variables: ${envValidation.missing.join(", ")}`;
+    console.error("[SHIPROCKET_ENV_MISSING]", {
+      order_id: orderId,
+      missing: envValidation.missing,
+      timestamp: new Date().toISOString(),
+    });
+
+    // Mark order as FAILED
+    try {
+      const existingMetadata = (order.metadata as Record<string, unknown>) || {};
+      await supabase
+        .from("orders")
+        .update({
+          shipment_status: "FAILED",
+          metadata: {
+            ...existingMetadata,
+            shipment_error: errorMessage,
+            shipment_failed_at: new Date().toISOString(),
+          },
+          updated_at: new Date().toISOString(),
+        } as unknown as never)
+        .eq("id", orderId);
+    } catch (dbError) {
+      console.error("[SHIPMENT_FAILURE_UPDATE_FAILED]", {
+        order_id: orderId,
+        error: dbError instanceof Error ? dbError.message : "Unknown error",
+      });
+    }
+
+    return { success: false, error: errorMessage };
+  }
+
   // Idempotency check: if shipment already BOOKED, return existing data
   // Allow retry if shipment_status is "FAILED" or null
   if (
@@ -177,13 +213,20 @@ export async function createShipmentForPaidOrder(
   let billingAddress: Address | null = null;
 
   // Check if shipping address is stored directly in order record
+  // Validate required fields before proceeding
   const hasDirectShippingAddress = 
     order.shipping_name &&
+    order.shipping_name.trim() &&
     order.shipping_phone &&
+    /^\d{10}$/.test(order.shipping_phone.replace(/\D/g, "")) &&
     order.shipping_address1 &&
+    order.shipping_address1.trim() &&
     order.shipping_city &&
+    order.shipping_city.trim() &&
     order.shipping_state &&
-    order.shipping_pincode;
+    order.shipping_state.trim() &&
+    order.shipping_pincode &&
+    /^\d{6}$/.test(order.shipping_pincode.replace(/\D/g, ""));
 
   if (hasDirectShippingAddress) {
     // Use shipping address from order record
@@ -324,6 +367,135 @@ export async function createShipmentForPaidOrder(
       error: rateError instanceof Error ? rateError.message : "Unknown error",
     });
     // Continue with 0 cost - don't block shipment
+  }
+
+  // STEP: Validate address fields before proceeding
+  if (!typedShippingAddress.full_name || !typedShippingAddress.full_name.trim()) {
+    const errorMessage = "INVALID_ADDRESS: shipping_name is required";
+    console.error("[SHIPMENT_ADDRESS_VALIDATION_FAILED]", {
+      order_id: orderId,
+      error: errorMessage,
+      timestamp: new Date().toISOString(),
+    });
+    
+    try {
+      const existingMetadata = (order.metadata as Record<string, unknown>) || {};
+      await supabase
+        .from("orders")
+        .update({
+          shipment_status: "FAILED",
+          metadata: {
+            ...existingMetadata,
+            shipment_error: errorMessage,
+            shipment_failed_at: new Date().toISOString(),
+          },
+          updated_at: new Date().toISOString(),
+        } as unknown as never)
+        .eq("id", orderId);
+    } catch (dbError) {
+      console.error("[SHIPMENT_FAILURE_UPDATE_FAILED]", {
+        order_id: orderId,
+        error: dbError instanceof Error ? dbError.message : "Unknown error",
+      });
+    }
+    
+    return { success: false, error: errorMessage };
+  }
+
+  if (!typedShippingAddress.phone || !/^\d{10}$/.test(typedShippingAddress.phone.replace(/\D/g, ""))) {
+    const errorMessage = "INVALID_ADDRESS: shipping_phone must be exactly 10 digits";
+    console.error("[SHIPMENT_ADDRESS_VALIDATION_FAILED]", {
+      order_id: orderId,
+      error: errorMessage,
+      timestamp: new Date().toISOString(),
+    });
+    
+    try {
+      const existingMetadata = (order.metadata as Record<string, unknown>) || {};
+      await supabase
+        .from("orders")
+        .update({
+          shipment_status: "FAILED",
+          metadata: {
+            ...existingMetadata,
+            shipment_error: errorMessage,
+            shipment_failed_at: new Date().toISOString(),
+          },
+          updated_at: new Date().toISOString(),
+        } as unknown as never)
+        .eq("id", orderId);
+    } catch (dbError) {
+      console.error("[SHIPMENT_FAILURE_UPDATE_FAILED]", {
+        order_id: orderId,
+        error: dbError instanceof Error ? dbError.message : "Unknown error",
+      });
+    }
+    
+    return { success: false, error: errorMessage };
+  }
+
+  if (!typedShippingAddress.pincode || !/^\d{6}$/.test(typedShippingAddress.pincode.replace(/\D/g, ""))) {
+    const errorMessage = "INVALID_ADDRESS: shipping_pincode must be exactly 6 digits";
+    console.error("[SHIPMENT_ADDRESS_VALIDATION_FAILED]", {
+      order_id: orderId,
+      error: errorMessage,
+      timestamp: new Date().toISOString(),
+    });
+    
+    try {
+      const existingMetadata = (order.metadata as Record<string, unknown>) || {};
+      await supabase
+        .from("orders")
+        .update({
+          shipment_status: "FAILED",
+          metadata: {
+            ...existingMetadata,
+            shipment_error: errorMessage,
+            shipment_failed_at: new Date().toISOString(),
+          },
+          updated_at: new Date().toISOString(),
+        } as unknown as never)
+        .eq("id", orderId);
+    } catch (dbError) {
+      console.error("[SHIPMENT_FAILURE_UPDATE_FAILED]", {
+        order_id: orderId,
+        error: dbError instanceof Error ? dbError.message : "Unknown error",
+      });
+    }
+    
+    return { success: false, error: errorMessage };
+  }
+
+  if (!typedShippingAddress.line1 || !typedShippingAddress.line1.trim()) {
+    const errorMessage = "INVALID_ADDRESS: shipping_address1 is required";
+    console.error("[SHIPMENT_ADDRESS_VALIDATION_FAILED]", {
+      order_id: orderId,
+      error: errorMessage,
+      timestamp: new Date().toISOString(),
+    });
+    
+    try {
+      const existingMetadata = (order.metadata as Record<string, unknown>) || {};
+      await supabase
+        .from("orders")
+        .update({
+          shipment_status: "FAILED",
+          metadata: {
+            ...existingMetadata,
+            shipment_error: errorMessage,
+            shipment_failed_at: new Date().toISOString(),
+          },
+          updated_at: new Date().toISOString(),
+        } as unknown as never)
+        .eq("id", orderId);
+    } catch (dbError) {
+      console.error("[SHIPMENT_FAILURE_UPDATE_FAILED]", {
+        order_id: orderId,
+        error: dbError instanceof Error ? dbError.message : "Unknown error",
+      });
+    }
+    
+    return { success: false, error: errorMessage };
   }
 
   try {
