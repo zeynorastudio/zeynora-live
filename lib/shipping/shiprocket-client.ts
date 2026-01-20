@@ -81,6 +81,82 @@ export interface ShiprocketOrderResponse {
 }
 
 /**
+ * Parse Shiprocket response defensively - handle all known response shapes
+ * Supports:
+ * - res.shipment_id
+ * - res.data.shipment_id
+ * - res.awb_code
+ * - res.data.awb_code
+ * 
+ * Returns parsed response object or null if nothing valid found
+ */
+function parseShiprocketResponse(
+  data: Record<string, unknown>,
+  httpStatus: number,
+  rawResponse: string
+): {
+  shipment_id: number | null;
+  awb_code: string | null;
+  courier_name: string | null;
+  raw: string;
+} | null {
+  // Extract shipment_id from various possible locations
+  let shipmentId: number | null = null;
+  if (data.shipment_id !== undefined && data.shipment_id !== null) {
+    const parsed = typeof data.shipment_id === "number" 
+      ? data.shipment_id 
+      : parseInt(String(data.shipment_id), 10);
+    if (!isNaN(parsed)) shipmentId = parsed;
+  } else if (data.data && typeof data.data === "object" && data.data !== null) {
+    const dataObj = data.data as Record<string, unknown>;
+    if (dataObj.shipment_id !== undefined && dataObj.shipment_id !== null) {
+      const parsed = typeof dataObj.shipment_id === "number"
+        ? dataObj.shipment_id
+        : parseInt(String(dataObj.shipment_id), 10);
+      if (!isNaN(parsed)) shipmentId = parsed;
+    }
+  }
+
+  // Extract awb_code from various possible locations
+  let awbCode: string | null = null;
+  if (data.awb_code !== undefined && data.awb_code !== null) {
+    const str = String(data.awb_code).trim();
+    if (str) awbCode = str;
+  } else if (data.data && typeof data.data === "object" && data.data !== null) {
+    const dataObj = data.data as Record<string, unknown>;
+    if (dataObj.awb_code !== undefined && dataObj.awb_code !== null) {
+      const str = String(dataObj.awb_code).trim();
+      if (str) awbCode = str;
+    }
+  }
+
+  // Extract courier_name
+  let courierName: string | null = null;
+  if (data.courier_name !== undefined && data.courier_name !== null) {
+    const str = String(data.courier_name).trim();
+    if (str) courierName = str;
+  } else if (data.data && typeof data.data === "object" && data.data !== null) {
+    const dataObj = data.data as Record<string, unknown>;
+    if (dataObj.courier_name !== undefined && dataObj.courier_name !== null) {
+      const str = String(dataObj.courier_name).trim();
+      if (str) courierName = str;
+    }
+  }
+
+  // Return null if nothing valid found (no shipment_id and no awb_code)
+  if (shipmentId === null && awbCode === null) {
+    return null;
+  }
+
+  return {
+    shipment_id: shipmentId,
+    awb_code: awbCode,
+    courier_name: courierName,
+    raw: rawResponse,
+  };
+}
+
+/**
  * Check if in-memory cached token is still valid
  * Returns false if expired or about to expire
  */
@@ -411,17 +487,49 @@ export async function createShiprocketOrder(
       // Parse response defensively - handle different Shiprocket response shapes
       const parsedResponse = parseShiprocketResponse(data, response.status, responseText);
       
+      // If parser returns null, it means no valid data found
+      if (!parsedResponse) {
+        console.error("[SHIPROCKET_PARSE_RESULT]", {
+          order_id: payload.order_id,
+          http_status: response.status,
+          result: "null - no valid shipment_id or awb_code found",
+          raw_response_preview: responseText.substring(0, 500),
+          timestamp: new Date().toISOString(),
+        });
+        
+        return {
+          status_code: response.status,
+          error_message: "Shiprocket response missing shipment_id and awb_code",
+          raw_response: responseText,
+          shipment_id: null,
+          awb_code: null,
+        } as ShiprocketOrderResponse;
+      }
+      
       console.log("[SHIPROCKET_PARSE_RESULT]", {
         order_id: payload.order_id,
         http_status: response.status,
         shipment_id: parsedResponse.shipment_id,
         awb_code: parsedResponse.awb_code,
+        courier_name: parsedResponse.courier_name,
         has_shipment_id: !!parsedResponse.shipment_id,
         has_awb_code: !!parsedResponse.awb_code,
         timestamp: new Date().toISOString(),
       });
 
-      return parsedResponse;
+      // Convert parsed response to ShiprocketOrderResponse format
+      return {
+        order_id: data.order_id ? (typeof data.order_id === "number" ? data.order_id : parseInt(String(data.order_id), 10)) : undefined,
+        shipment_id: parsedResponse.shipment_id,
+        status: data.status ? String(data.status) : undefined,
+        status_code: response.status,
+        awb_code: parsedResponse.awb_code,
+        courier_name: parsedResponse.courier_name,
+        courier_company_id: data.courier_company_id !== undefined ? (typeof data.courier_company_id === "number" ? data.courier_company_id : parseInt(String(data.courier_company_id), 10)) : null,
+        tracking_url: data.tracking_url ? String(data.tracking_url) : null,
+        expected_delivery_date: data.expected_delivery_date ? String(data.expected_delivery_date) : null,
+        raw_response: parsedResponse.raw,
+      } as ShiprocketOrderResponse;
     } catch (error: unknown) {
       const errorMessage = error instanceof Error ? error.message : "Unknown error";
       
