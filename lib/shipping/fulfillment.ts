@@ -176,31 +176,36 @@ export function validateShiprocketPayload(payload: ShiprocketOrderPayload): Payl
     errors.push("billing_country is required and cannot be empty");
   }
 
-  // Validate shipping fields (same rules)
-  if (!payload.shipping_customer_name || !payload.shipping_customer_name.trim()) {
-    errors.push("shipping_customer_name is required and cannot be empty");
+  // STEP 2: Validate shipping fields only if shipping_is_billing is false
+  // If shipping_is_billing = true, shipping fields are auto-filled from billing and should not be validated separately
+  if (payload.shipping_is_billing !== true) {
+    // Enforce full validation on shipping_* fields when shipping_is_billing is false
+    if (!payload.shipping_customer_name || !payload.shipping_customer_name.trim()) {
+      errors.push("shipping_customer_name is required and cannot be empty");
+    }
+    if (!payload.shipping_phone || !/^\d{10}$/.test(payload.shipping_phone)) {
+      errors.push(`shipping_phone must be exactly 10 digits, got "${payload.shipping_phone || "empty"}"`);
+    }
+    if (!payload.shipping_email || !payload.shipping_email.trim() || !payload.shipping_email.includes("@")) {
+      errors.push(`shipping_email must be valid (not empty and contain '@'), got "${payload.shipping_email || "empty"}"`);
+    }
+    if (!payload.shipping_address || !payload.shipping_address.trim()) {
+      errors.push("shipping_address is required and cannot be empty");
+    }
+    if (!payload.shipping_city || !payload.shipping_city.trim()) {
+      errors.push("shipping_city is required and cannot be empty");
+    }
+    if (!payload.shipping_state || !payload.shipping_state.trim()) {
+      errors.push("shipping_state is required and cannot be empty");
+    }
+    if (!payload.shipping_pincode || !/^\d{6}$/.test(payload.shipping_pincode)) {
+      errors.push(`shipping_pincode must be exactly 6 digits, got "${payload.shipping_pincode || "empty"}"`);
+    }
+    if (!payload.shipping_country || !payload.shipping_country.trim()) {
+      errors.push("shipping_country is required and cannot be empty");
+    }
   }
-  if (!payload.shipping_phone || !/^\d{10}$/.test(payload.shipping_phone)) {
-    errors.push(`shipping_phone must be exactly 10 digits, got "${payload.shipping_phone || "empty"}"`);
-  }
-  if (!payload.shipping_email || !payload.shipping_email.trim() || !payload.shipping_email.includes("@")) {
-    errors.push(`shipping_email must be valid (not empty and contain '@'), got "${payload.shipping_email || "empty"}"`);
-  }
-  if (!payload.shipping_address || !payload.shipping_address.trim()) {
-    errors.push("shipping_address is required and cannot be empty");
-  }
-  if (!payload.shipping_city || !payload.shipping_city.trim()) {
-    errors.push("shipping_city is required and cannot be empty");
-  }
-  if (!payload.shipping_state || !payload.shipping_state.trim()) {
-    errors.push("shipping_state is required and cannot be empty");
-  }
-  if (!payload.shipping_pincode || !/^\d{6}$/.test(payload.shipping_pincode)) {
-    errors.push(`shipping_pincode must be exactly 6 digits, got "${payload.shipping_pincode || "empty"}"`);
-  }
-  if (!payload.shipping_country || !payload.shipping_country.trim()) {
-    errors.push("shipping_country is required and cannot be empty");
-  }
+  // If shipping_is_billing = true, skip shipping validation (fields are auto-filled from billing)
 
   // Validate order_items.length > 0
   if (!payload.order_items || payload.order_items.length === 0) {
@@ -521,8 +526,61 @@ export async function prepareFulfillmentPayload(
     order_items: normalizedOrderItems,
   };
 
-  // STEP 2: Conditionally add shipping fields
-  if (!shippingIsBilling) {
+  // STEP 1: Handle shipping_is_billing BEFORE validation
+  // If shipping_is_billing = true, copy billing fields to shipping fields
+  if (shippingIsBilling) {
+    basePayload.shipping_is_billing = true;
+    
+    // Auto-fill shipping fields from billing fields
+    basePayload.shipping_customer_name = billingName.firstName;
+    basePayload.shipping_last_name = billingName.lastName;
+    basePayload.shipping_phone = normalizedBillingPhone;
+    basePayload.shipping_email = orderEmail.trim();
+    basePayload.shipping_address = (billAddr.line1 || "").trim();
+    basePayload.shipping_address_2 = billAddr.line2?.trim() || undefined;
+    basePayload.shipping_city = (billAddr.city || "").trim();
+    basePayload.shipping_state = (billAddr.state || "").trim();
+    basePayload.shipping_pincode = normalizedBillingPincode;
+    basePayload.shipping_country = (billAddr.country || "India").trim();
+    
+    // STEP 3: Prevent empty shipping data after auto-copy
+    const missingFields: string[] = [];
+    if (!basePayload.shipping_customer_name || String(basePayload.shipping_customer_name).trim() === "") {
+      missingFields.push("shipping_customer_name");
+    }
+    if (!basePayload.shipping_phone || String(basePayload.shipping_phone).trim() === "") {
+      missingFields.push("shipping_phone");
+    }
+    if (!basePayload.shipping_email || String(basePayload.shipping_email).trim() === "") {
+      missingFields.push("shipping_email");
+    }
+    if (!basePayload.shipping_address || String(basePayload.shipping_address).trim() === "") {
+      missingFields.push("shipping_address");
+    }
+    if (!basePayload.shipping_city || String(basePayload.shipping_city).trim() === "") {
+      missingFields.push("shipping_city");
+    }
+    if (!basePayload.shipping_state || String(basePayload.shipping_state).trim() === "") {
+      missingFields.push("shipping_state");
+    }
+    if (!basePayload.shipping_pincode || String(basePayload.shipping_pincode).trim() === "") {
+      missingFields.push("shipping_pincode");
+    }
+    if (!basePayload.shipping_country || String(basePayload.shipping_country).trim() === "") {
+      missingFields.push("shipping_country");
+    }
+    
+    if (missingFields.length > 0) {
+      const errorMsg = `BILLING_DATA_INCOMPLETE: Missing billing fields: ${missingFields.join(", ")}`;
+      console.error("[FULFILLMENT_BILLING_DATA_INCOMPLETE]", {
+        order_id: order.id,
+        order_number: order.order_number,
+        missing_fields: missingFields,
+        timestamp: new Date().toISOString(),
+      });
+      throw new Error(errorMsg);
+    }
+  } else {
     basePayload.shipping_is_billing = false;
     basePayload.shipping_customer_name = shippingName.firstName;
     basePayload.shipping_last_name = shippingName.lastName;
@@ -534,8 +592,6 @@ export async function prepareFulfillmentPayload(
     basePayload.shipping_country = (shippingAddress.country || "India").trim();
     basePayload.shipping_email = orderEmail.trim();
     basePayload.shipping_phone = normalizedShippingPhone;
-  } else {
-    basePayload.shipping_is_billing = true;
   }
 
   // STEP 7: Final payload sanity check
@@ -1013,8 +1069,10 @@ export async function safeCreateAWBIfMissing(orderId: string): Promise<{
     });
 
     // Mark as FAILED (allows retry)
-    // If error is MISSING_EMAIL or PAYLOAD_NORMALIZATION_FAILED, use that exact error code
-    const finalError = errorMessage === "MISSING_EMAIL" || errorMessage.startsWith("PAYLOAD_NORMALIZATION_FAILED") 
+    // Preserve specific error codes: MISSING_EMAIL, PAYLOAD_NORMALIZATION_FAILED, BILLING_DATA_INCOMPLETE
+    const finalError = errorMessage === "MISSING_EMAIL" || 
+      errorMessage.startsWith("PAYLOAD_NORMALIZATION_FAILED") ||
+      errorMessage.startsWith("BILLING_DATA_INCOMPLETE")
       ? errorMessage 
       : errorMessage;
     await markFulfillmentFailed(orderId, order.order_number, finalError, error);
