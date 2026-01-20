@@ -267,8 +267,127 @@ function computeChargeableWeight(
 }
 
 /**
+ * STEP 1: Normalize customer name - split first word and remaining words
+ */
+function normalizeCustomerName(fullName: string | null): { firstName: string; lastName: string } {
+  const name = (fullName || "Customer").trim();
+  const words = name.split(/\s+/).filter(w => w.length > 0);
+  
+  if (words.length === 0) {
+    return { firstName: "Customer", lastName: "." };
+  }
+  
+  if (words.length === 1) {
+    return { firstName: words[0], lastName: "." };
+  }
+  
+  return {
+    firstName: words[0],
+    lastName: words.slice(1).join(" ") || "."
+  };
+}
+
+/**
+ * STEP 3: Normalize data types - ensure integers are integers, not strings
+ */
+function normalizeInteger(value: string | number | null | undefined, fallback: number = 0): number {
+  if (typeof value === "number") {
+    if (isNaN(value) || !isFinite(value)) return fallback;
+    return Math.round(value);
+  }
+  if (typeof value === "string") {
+    const parsed = parseInt(value.replace(/\D/g, ""), 10);
+    return isNaN(parsed) ? fallback : parsed;
+  }
+  return fallback;
+}
+
+function normalizeFloat(value: string | number | null | undefined, decimals: number = 2, fallback: number = 0): number {
+  if (typeof value === "number") {
+    if (isNaN(value) || !isFinite(value)) return fallback;
+    return parseFloat(value.toFixed(decimals));
+  }
+  if (typeof value === "string") {
+    const parsed = parseFloat(value);
+    return isNaN(parsed) ? fallback : parseFloat(parsed.toFixed(decimals));
+  }
+  return fallback;
+}
+
+/**
+ * STEP 7: Final payload sanity check
+ */
+function validatePayloadSanity(payload: Record<string, unknown>): { valid: boolean; errors: string[] } {
+  const errors: string[] = [];
+  
+  function checkField(key: string, value: unknown, required: boolean = true): void {
+    if (required && (value === undefined || value === null)) {
+      errors.push(`${key} is undefined or null`);
+      return;
+    }
+    
+    if (value === undefined || value === null) {
+      return; // Optional fields can be undefined/null
+    }
+    
+    if (typeof value === "string" && value.trim() === "" && required) {
+      errors.push(`${key} is empty string`);
+      return;
+    }
+    
+    if (typeof value === "number" && (isNaN(value) || !isFinite(value))) {
+      errors.push(`${key} is NaN or not finite`);
+      return;
+    }
+  }
+  
+  // Check all fields
+  Object.keys(payload).forEach(key => {
+    const value = payload[key];
+    
+    // Skip optional fields that are undefined
+    if (value === undefined && (key === "billing_address_2" || key === "shipping_address_2" || key === "billing_last_name" || key === "shipping_last_name")) {
+      return;
+    }
+    
+    checkField(key, value, true);
+    
+    // Check for empty strings in required fields
+    if (typeof value === "string" && value.trim() === "" && key !== "billing_address_2" && key !== "shipping_address_2" && key !== "billing_last_name" && key !== "shipping_last_name") {
+      errors.push(`${key} is empty string`);
+    }
+    
+    // Check for NaN in numeric fields
+    if (typeof value === "number" && (isNaN(value) || !isFinite(value))) {
+      errors.push(`${key} is NaN or not finite`);
+    }
+  });
+  
+  // Check order_items array
+  if (payload.order_items && Array.isArray(payload.order_items)) {
+    (payload.order_items as unknown[]).forEach((item: unknown, index: number) => {
+      if (typeof item !== "object" || item === null) {
+        errors.push(`order_items[${index}] is not an object`);
+        return;
+      }
+      
+      const itemObj = item as Record<string, unknown>;
+      checkField(`order_items[${index}].name`, itemObj.name);
+      checkField(`order_items[${index}].sku`, itemObj.sku);
+      checkField(`order_items[${index}].units`, itemObj.units);
+      checkField(`order_items[${index}].selling_price`, itemObj.selling_price);
+    });
+  }
+  
+  return {
+    valid: errors.length === 0,
+    errors
+  };
+}
+
+/**
  * Prepare fulfillment payload for Shiprocket
- * Uses ENV-based defaults for weight/dimensions
+ * FINAL VERSION: Strict payload normalization to fix 422 errors
  */
 export async function prepareFulfillmentPayload(
   order: OrderWithItems,
@@ -295,10 +414,9 @@ export async function prepareFulfillmentPayload(
   const addressValidation = validateAddress(shippingAddress);
   if (!addressValidation.valid) {
     console.warn("[FULFILLMENT] Address validation warnings:", addressValidation.errors);
-    // Continue anyway - Shiprocket will reject if truly invalid
   }
 
-  // Fetch product names for items (for better order display in Shiprocket)
+  // Fetch product names for items
   const productUids = [...new Set(orderItems.map((item) => item.product_uid))];
   const { data: products } = await supabase
     .from("products")
@@ -313,7 +431,6 @@ export async function prepareFulfillmentPayload(
   // STEP 1: Validate email from order.shipping_email
   const orderEmail = order.shipping_email || "";
   
-  // Validate email: not empty and contains "@"
   if (!orderEmail || !orderEmail.trim() || !orderEmail.includes("@")) {
     console.error("[FULFILLMENT_EMAIL_VALIDATION_FAILED]", {
       order_id: order.id,
@@ -325,65 +442,125 @@ export async function prepareFulfillmentPayload(
     throw new Error("MISSING_EMAIL");
   }
 
-  // Build Shiprocket payload with all required fields
-  const shiprocketPayload: ShiprocketOrderPayload = {
-    // Order identification
+  // STEP 1: Normalize customer names from order.shipping_name
+  const billingName = normalizeCustomerName(order.shipping_name || billAddr.full_name);
+  const shippingName = normalizeCustomerName(order.shipping_name || shippingAddress.full_name);
+
+  // STEP 2: Determine if shipping is billing
+  const shippingIsBilling = billingAddress?.id === shippingAddress.id || !billingAddress;
+
+  // STEP 3: Normalize all data types
+  const normalizedBillingPhone = normalizeInteger(validatePhone(billAddr.phone));
+  const normalizedShippingPhone = normalizeInteger(validatePhone(shippingAddress.phone));
+  const normalizedBillingPincode = normalizeInteger(validatePincode(billAddr.pincode));
+  const normalizedShippingPincode = normalizeInteger(validatePincode(shippingAddress.pincode));
+  
+  // STEP 4: Fix order_date format - full ISO string with time
+  const orderDate = new Date(order.created_at).toISOString();
+
+  // STEP 5: Determine payment method and cod flag
+  const paymentMethod = "Prepaid"; // Always prepaid since we only ship after payment
+  const codFlag = 0; // 0 for prepaid
+
+  // STEP 6: Normalize order items
+  const normalizedOrderItems = orderItems.map((item) => {
+    const product = productsMap.get(item.product_uid);
+    return {
+      name: (item.name || (product as { name?: string })?.name || "Product").trim(),
+      sku: (item.sku || `SKU-${item.id.substring(0, 8)}`).trim(),
+      units: normalizeInteger(item.quantity),
+      selling_price: normalizeInteger(item.price),
+      discount: 0,
+      tax: 0,
+    };
+  });
+
+  // Calculate totals as integers
+  const subTotal = normalizeInteger(orderItems.reduce((sum, item) => sum + item.price * item.quantity, 0));
+  const orderTotal = subTotal;
+  const shippingCharges = 0;
+
+  // Normalize dimensions and weight
+  const normalizedLength = normalizeInteger(packageDimensions.length);
+  const normalizedBreadth = normalizeInteger(packageDimensions.breadth);
+  const normalizedHeight = normalizeInteger(packageDimensions.height);
+  const normalizedWeight = normalizeFloat(chargeableWeight, 2);
+
+  // Build base payload
+  const basePayload: Record<string, unknown> = {
     order_id: order.order_number,
-    order_date: new Date(order.created_at).toISOString().split("T")[0],
+    order_date: orderDate,
+    pickup_location: pickupLocation.trim(),
     
-    // Pickup location from ENV
-    pickup_location: pickupLocation,
+    // Billing details with normalized names
+    billing_customer_name: billingName.firstName,
+    billing_last_name: billingName.lastName,
+    billing_address: (billAddr.line1 || "").trim(),
+    billing_address_2: billAddr.line2?.trim() || undefined,
+    billing_city: (billAddr.city || "").trim(),
+    billing_pincode: normalizedBillingPincode,
+    billing_state: (billAddr.state || "").trim(),
+    billing_country: (billAddr.country || "India").trim(),
+    billing_email: orderEmail.trim(),
+    billing_phone: normalizedBillingPhone,
     
-    // Billing details
-    billing_customer_name: billAddr.full_name || "Customer",
-    billing_address: billAddr.line1 || "",
-    billing_address_2: billAddr.line2 || undefined,
-    billing_city: billAddr.city || "",
-    billing_pincode: validatePincode(billAddr.pincode),
-    billing_state: billAddr.state || "",
-    billing_country: billAddr.country || "India",
-    billing_email: orderEmail, // Use order.shipping_email
-    billing_phone: validatePhone(billAddr.phone),
+    // Payment fields
+    payment_method: paymentMethod,
+    cod: codFlag,
+    sub_total: subTotal,
+    order_total: orderTotal,
+    shipping_charges: shippingCharges,
     
-    // Shipping details
-    shipping_is_billing: billingAddress?.id === shippingAddress.id || !billingAddress,
-    shipping_customer_name: shippingAddress.full_name || "Customer",
-    shipping_address: shippingAddress.line1 || "",
-    shipping_address_2: shippingAddress.line2 || undefined,
-    shipping_city: shippingAddress.city || "",
-    shipping_pincode: validatePincode(shippingAddress.pincode),
-    shipping_state: shippingAddress.state || "",
-    shipping_country: shippingAddress.country || "India",
-    shipping_email: orderEmail, // Use order.shipping_email
-    shipping_phone: validatePhone(shippingAddress.phone),
+    // Package dimensions (integers)
+    length: normalizedLength,
+    breadth: normalizedBreadth,
+    height: normalizedHeight,
+    weight: normalizedWeight,
     
     // Order items
-    order_items: orderItems.map((item) => {
-      const product = productsMap.get(item.product_uid);
-      return {
-        name: item.name || (product as { name?: string })?.name || "Product",
-        sku: item.sku || `SKU-${item.id.substring(0, 8)}`,
-        units: item.quantity,
-        selling_price: item.price,
-      };
-    }),
-    
-    // Payment method (always Prepaid since we only ship after payment)
-    payment_method: "Prepaid",
-    
-    // Totals
-    sub_total: orderItems.reduce((sum, item) => sum + item.price * item.quantity, 0),
-    
-    // Package dimensions from ENV
-    length: packageDimensions.length,
-    breadth: packageDimensions.breadth,
-    height: packageDimensions.height,
-    weight: chargeableWeight,
+    order_items: normalizedOrderItems,
   };
 
+  // STEP 2: Conditionally add shipping fields
+  if (!shippingIsBilling) {
+    basePayload.shipping_is_billing = false;
+    basePayload.shipping_customer_name = shippingName.firstName;
+    basePayload.shipping_last_name = shippingName.lastName;
+    basePayload.shipping_address = (shippingAddress.line1 || "").trim();
+    basePayload.shipping_address_2 = shippingAddress.line2?.trim() || undefined;
+    basePayload.shipping_city = (shippingAddress.city || "").trim();
+    basePayload.shipping_pincode = normalizedShippingPincode;
+    basePayload.shipping_state = (shippingAddress.state || "").trim();
+    basePayload.shipping_country = (shippingAddress.country || "India").trim();
+    basePayload.shipping_email = orderEmail.trim();
+    basePayload.shipping_phone = normalizedShippingPhone;
+  } else {
+    basePayload.shipping_is_billing = true;
+  }
+
+  // STEP 7: Final payload sanity check
+  const sanityCheck = validatePayloadSanity(basePayload);
+  if (!sanityCheck.valid) {
+    const errorMsg = `PAYLOAD_NORMALIZATION_FAILED: ${sanityCheck.errors.join("; ")}`;
+    console.error("[FULFILLMENT_PAYLOAD_SANITY_CHECK_FAILED]", {
+      order_id: order.id,
+      order_number: order.order_number,
+      errors: sanityCheck.errors,
+      timestamp: new Date().toISOString(),
+    });
+    throw new Error(errorMsg);
+  }
+
+  // Cast to ShiprocketOrderPayload (with type assertion for additional fields)
+  const shiprocketPayload = basePayload as unknown as ShiprocketOrderPayload;
+
   return {
-    chargeableWeight,
-    packageDimensions,
+    chargeableWeight: normalizedWeight,
+    packageDimensions: {
+      length: normalizedLength,
+      breadth: normalizedBreadth,
+      height: normalizedHeight,
+    },
     shiprocketPayload,
   };
 }
@@ -752,7 +929,29 @@ export async function safeCreateAWBIfMissing(orderId: string): Promise<{
       };
     }
 
-    // STEP 3: Log final payload ONCE before calling Shiprocket
+    // STEP 7: Final payload sanity check before API call
+    const sanityCheck = validatePayloadSanity(fulfillmentPayload.shiprocketPayload as unknown as Record<string, unknown>);
+    if (!sanityCheck.valid) {
+      const errorMsg = `PAYLOAD_NORMALIZATION_FAILED: ${sanityCheck.errors.join("; ")}`;
+      
+      console.error("[SHIPMENT_PAYLOAD_SANITY_CHECK_FAILED]", {
+        order_id: orderId,
+        order_number: order.order_number,
+        errors: sanityCheck.errors,
+        timestamp: new Date().toISOString(),
+      });
+
+      await markFulfillmentFailed(orderId, order.order_number, errorMsg, {
+        sanity_check_errors: sanityCheck.errors,
+      });
+
+      return {
+        success: false,
+        error: errorMsg,
+      };
+    }
+
+    // STEP 8: Log final payload ONCE before calling Shiprocket
     console.log("[SHIPROCKET_FINAL_PAYLOAD]", JSON.stringify(fulfillmentPayload.shiprocketPayload, null, 2));
 
     // Create Shiprocket order
@@ -814,8 +1013,10 @@ export async function safeCreateAWBIfMissing(orderId: string): Promise<{
     });
 
     // Mark as FAILED (allows retry)
-    // If error is MISSING_EMAIL, use that exact error code
-    const finalError = errorMessage === "MISSING_EMAIL" ? "MISSING_EMAIL" : errorMessage;
+    // If error is MISSING_EMAIL or PAYLOAD_NORMALIZATION_FAILED, use that exact error code
+    const finalError = errorMessage === "MISSING_EMAIL" || errorMessage.startsWith("PAYLOAD_NORMALIZATION_FAILED") 
+      ? errorMessage 
+      : errorMessage;
     await markFulfillmentFailed(orderId, order.order_number, finalError, error);
 
     return {
