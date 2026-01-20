@@ -635,17 +635,118 @@ export async function createShiprocketOrderForFulfillment(
 
 /**
  * Handle Shiprocket response and persist to database
- * On success: shipment_status = "BOOKED", saves awb_code
- * On failure: shipment_status = "FAILED"
+ * 
+ * CRITICAL VALIDATION RULES:
+ * - Only mark BOOKED if HTTP status is 200 or 201
+ * - Only mark BOOKED if response contains shipment_id OR awb_code (not null/undefined)
+ * - If shipment_id is missing → throw error, do NOT mark BOOKED
+ * - On failure: save error_message, status_code, raw_response, mark as FAILED
  */
 export async function handleShiprocketResponse(
   orderId: string,
   response: ShiprocketOrderResponse,
-  fulfillmentPayload: FulfillmentPayload
+  fulfillmentPayload: FulfillmentPayload,
+  orderNumber: string
 ): Promise<void> {
   const supabase = createServiceRoleClient();
 
-  // Update order metadata
+  // HARD GUARD: Check HTTP status code - must be 200 or 201
+  const httpStatus = response.status_code;
+  const isValidHttpStatus = httpStatus === 200 || httpStatus === 201;
+
+  if (!isValidHttpStatus) {
+    console.error("[SHIPMENT_REJECTED]", {
+      order_id: orderId,
+      order_number: orderNumber,
+      http_status: httpStatus,
+      reason: "HTTP status is not 200 or 201",
+      raw_response: response.raw_response?.substring(0, 500),
+      timestamp: new Date().toISOString(),
+    });
+
+    // Mark as FAILED with error details
+    await markFulfillmentFailed(
+      orderId,
+      orderNumber,
+      `Shiprocket API returned HTTP ${httpStatus}`,
+      {
+        status_code: httpStatus,
+        error_message: response.error_message || `HTTP ${httpStatus}`,
+        raw_response: response.raw_response,
+      }
+    );
+    return;
+  }
+
+  // HARD GUARD: Check for shipment_id or awb_code - at least one must exist
+  const hasShipmentId = response.shipment_id !== null && response.shipment_id !== undefined;
+  const hasAwbCode = response.awb_code !== null && response.awb_code !== undefined && response.awb_code.trim() !== "";
+
+  if (!hasShipmentId && !hasAwbCode) {
+    console.error("[SHIPMENT_REJECTED]", {
+      order_id: orderId,
+      order_number: orderNumber,
+      http_status: httpStatus,
+      reason: "Missing shipment_id and awb_code",
+      shipment_id: response.shipment_id,
+      awb_code: response.awb_code,
+      raw_response: response.raw_response?.substring(0, 500),
+      timestamp: new Date().toISOString(),
+    });
+
+    // Mark as FAILED
+    await markFulfillmentFailed(
+      orderId,
+      orderNumber,
+      "Shiprocket response missing shipment_id and awb_code",
+      {
+        status_code: httpStatus,
+        error_message: "Response missing required fields: shipment_id and awb_code",
+        raw_response: response.raw_response,
+      }
+    );
+    return;
+  }
+
+  // HARD GUARD: shipment_id is REQUIRED - throw error if missing
+  if (!hasShipmentId) {
+    const errorMsg = "Shiprocket response missing shipment_id - cannot mark as BOOKED";
+    console.error("[SHIPMENT_REJECTED]", {
+      order_id: orderId,
+      order_number: orderNumber,
+      http_status: httpStatus,
+      reason: "Missing shipment_id (hard guard)",
+      awb_code: response.awb_code,
+      raw_response: response.raw_response?.substring(0, 500),
+      timestamp: new Date().toISOString(),
+    });
+
+    // Mark as FAILED
+    await markFulfillmentFailed(
+      orderId,
+      orderNumber,
+      errorMsg,
+      {
+        status_code: httpStatus,
+        error_message: errorMsg,
+        raw_response: response.raw_response,
+      }
+    );
+    throw new Error(errorMsg);
+  }
+
+  // All validations passed - log confirmation
+  console.log("[SHIPMENT_CONFIRMED]", {
+    order_id: orderId,
+    order_number: orderNumber,
+    http_status: httpStatus,
+    shipment_id: response.shipment_id,
+    awb_code: response.awb_code || null,
+    courier_name: response.courier_name || null,
+    timestamp: new Date().toISOString(),
+  });
+
+  // Fetch current order metadata
   const { data: orderData } = await supabase
     .from("orders")
     .select("metadata")
@@ -686,10 +787,10 @@ export async function handleShiprocketResponse(
     ],
   };
 
-  // Update order with BOOKED status
+  // Update order with BOOKED status - only after all validations pass
   const { error: updateError } = await supabase.from("orders").update({
     shiprocket_shipment_id: String(response.shipment_id),
-    shipment_status: "BOOKED", // Success status
+    shipment_status: "BOOKED", // Success status - only set after validation
     shipping_status: response.awb_code ? "shipped" : "processing",
     courier_name: response.courier_name || null,
     metadata: updatedMetadata,
@@ -701,6 +802,7 @@ export async function handleShiprocketResponse(
       order_id: orderId,
       error: updateError.message,
     });
+    throw new Error(`Failed to update order: ${updateError.message}`);
   }
 
   // Write audit log
@@ -723,13 +825,18 @@ export async function handleShiprocketResponse(
 
 /**
  * Mark order as fulfillment failed
- * Saves error message and allows retry
+ * Saves error message, status_code, raw_response and allows retry
  */
 async function markFulfillmentFailed(
   orderId: string,
   orderNumber: string,
   errorMessage: string,
-  errorDetails?: unknown
+  errorDetails?: {
+    status_code?: number;
+    error_message?: string;
+    raw_response?: string;
+    [key: string]: unknown;
+  }
 ): Promise<void> {
   const supabase = createServiceRoleClient();
 
@@ -747,6 +854,9 @@ async function markFulfillmentFailed(
     ...existingMetadata,
     shipment_error: errorMessage,
     shipment_error_details: errorDetails || null,
+    shipment_status_code: errorDetails?.status_code || null,
+    shipment_error_message: errorDetails?.error_message || errorMessage,
+    shipment_raw_response: errorDetails?.raw_response || null,
     shipment_failed_at: new Date().toISOString(),
     shipping_timeline: [
       ...shippingTimeline,
@@ -754,6 +864,7 @@ async function markFulfillmentFailed(
         status: "FAILED",
         timestamp: new Date().toISOString(),
         error: errorMessage,
+        status_code: errorDetails?.status_code,
       },
     ],
   };
@@ -777,6 +888,7 @@ async function markFulfillmentFailed(
       details: {
         order_number: orderNumber,
         error: errorMessage,
+        status_code: errorDetails?.status_code,
         requires_attention: true,
       },
     } as unknown as never);
@@ -976,6 +1088,7 @@ export async function safeCreateAWBIfMissing(orderId: string): Promise<{
 
       // Mark as FAILED with validation error
       await markFulfillmentFailed(orderId, order.order_number, errorMsg, {
+        error_message: errorMsg,
         validation_errors: payloadValidation.errors,
       });
 
@@ -998,6 +1111,7 @@ export async function safeCreateAWBIfMissing(orderId: string): Promise<{
       });
 
       await markFulfillmentFailed(orderId, order.order_number, errorMsg, {
+        error_message: errorMsg,
         sanity_check_errors: sanityCheck.errors,
       });
 
@@ -1021,10 +1135,11 @@ export async function safeCreateAWBIfMissing(orderId: string): Promise<{
       shipment_id: response.shipment_id,
       awb_code: response.awb_code,
       status: response.status,
+      status_code: response.status_code,
     });
 
-    // Handle success response
-    await handleShiprocketResponse(orderId, response, fulfillmentPayload);
+    // Handle response - validates before marking BOOKED
+    await handleShiprocketResponse(orderId, response, fulfillmentPayload, order.order_number);
 
     // Send shipping notification email if AWB was generated
     if (response.awb_code) {
@@ -1075,7 +1190,19 @@ export async function safeCreateAWBIfMissing(orderId: string): Promise<{
       errorMessage.startsWith("BILLING_DATA_INCOMPLETE")
       ? errorMessage 
       : errorMessage;
-    await markFulfillmentFailed(orderId, order.order_number, finalError, error);
+    
+    // Convert error to proper format for markFulfillmentFailed
+    const errorDetails: {
+      error_message: string;
+      raw_response?: string;
+      [key: string]: unknown;
+    } = error instanceof Error 
+      ? { error_message: error.message, raw_response: error.stack }
+      : typeof error === "object" && error !== null
+      ? { error_message: String(error), raw_response: JSON.stringify(error) }
+      : { error_message: finalError };
+    
+    await markFulfillmentFailed(orderId, order.order_number, finalError, errorDetails);
 
     return {
       success: false,

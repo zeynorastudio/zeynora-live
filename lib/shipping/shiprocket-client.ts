@@ -67,15 +67,17 @@ export interface ShiprocketOrderPayload {
 }
 
 export interface ShiprocketOrderResponse {
-  order_id: number;
-  shipment_id: number;
-  status: string;
-  status_code: number;
-  awb_code?: string;
-  courier_name?: string;
-  courier_company_id?: number;
-  tracking_url?: string;
-  expected_delivery_date?: string;
+  order_id?: number;
+  shipment_id?: number | null;
+  status?: string;
+  status_code: number; // HTTP status code from API
+  awb_code?: string | null;
+  courier_name?: string | null;
+  courier_company_id?: number | null;
+  tracking_url?: string | null;
+  expected_delivery_date?: string | null;
+  raw_response?: string; // Raw JSON response for debugging
+  error_message?: string; // Error message if API call failed
 }
 
 /**
@@ -172,11 +174,12 @@ export async function authenticate(): Promise<string> {
     );
   }
 
-  // Log auth start
+  // Log auth start with masked email
+  const maskedEmail = SHIPROCKET_EMAIL ? SHIPROCKET_EMAIL.substring(0, 3) + "***" : "***";
   console.log("[SHIPROCKET_AUTH_START]", {
     timestamp: new Date().toISOString(),
     auth_url: SHIPROCKET_AUTH_URL,
-    email: SHIPROCKET_EMAIL.substring(0, 3) + "***", // Partial for security
+    email: maskedEmail,
   });
 
   try {
@@ -377,25 +380,48 @@ export async function createShiprocketOrder(
         }
       }
 
+      // Log raw response for debugging
+      console.log("[SHIPROCKET_RESPONSE_RAW]", {
+        order_id: payload.order_id,
+        http_status: response.status,
+        raw_response: responseText.substring(0, 500), // First 500 chars for logging
+        timestamp: new Date().toISOString(),
+      });
+
       if (!response.ok) {
         const errorMsg = (data.message as string) || JSON.stringify(data);
         console.error("[SHIPROCKET_ORDER_CREATE_API_ERROR]", {
           order_id: payload.order_id,
           status: response.status,
           error: errorMsg,
+          raw_response: responseText,
           timestamp: new Date().toISOString(),
         });
-        throw new Error(`Shiprocket API error: ${response.status} - ${errorMsg}`);
+        
+        // Return error response with status_code and raw_response
+        return {
+          status_code: response.status,
+          error_message: errorMsg,
+          raw_response: responseText,
+          shipment_id: null,
+          awb_code: null,
+        } as ShiprocketOrderResponse;
       }
 
-      console.log("[SHIPROCKET_ORDER_CREATE_OK]", {
+      // Parse response defensively - handle different Shiprocket response shapes
+      const parsedResponse = parseShiprocketResponse(data, response.status, responseText);
+      
+      console.log("[SHIPROCKET_PARSE_RESULT]", {
         order_id: payload.order_id,
-        shipment_id: data.shipment_id,
-        status: data.status,
+        http_status: response.status,
+        shipment_id: parsedResponse.shipment_id,
+        awb_code: parsedResponse.awb_code,
+        has_shipment_id: !!parsedResponse.shipment_id,
+        has_awb_code: !!parsedResponse.awb_code,
         timestamp: new Date().toISOString(),
       });
 
-      return data as unknown as ShiprocketOrderResponse;
+      return parsedResponse;
     } catch (error: unknown) {
       const errorMessage = error instanceof Error ? error.message : "Unknown error";
       

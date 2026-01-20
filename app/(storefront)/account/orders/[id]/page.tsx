@@ -238,6 +238,9 @@ export default async function OrderDetailPage({
   // Check fulfillment state
   const fulfillmentFailed = typedOrder.shipping_status === "fulfillment_failed";
   const fulfillmentError = metadata.fulfillment_error || null;
+  
+  // CRITICAL: Check for invalid booking - BOOKED status but no shipment_id
+  const isInvalidBooking = typedOrder.shipment_status === "BOOKED" && !typedOrder.shiprocket_shipment_id;
 
   // Extract package details (may be in metadata)
   const packageWeightKg = metadata.package_weight_kg || null;
@@ -602,6 +605,16 @@ export default async function OrderDetailPage({
                     {getShippingStatusLabel(typedOrder.shipping_status)}
                   </Badge>
                 </div>
+                {isInvalidBooking && (
+                  <div className="p-3 bg-orange-50 border border-orange-200 rounded-lg">
+                    <p className="text-sm text-orange-900 font-medium mb-1">
+                      Invalid booking – retry required
+                    </p>
+                    <p className="text-xs text-orange-700">
+                      There was an issue with your shipment booking. Please contact support for assistance.
+                    </p>
+                  </div>
+                )}
                 {fulfillmentFailed && (
                   <div className="p-3 bg-vine/10 border border-vine/30 rounded-lg">
                     <p className="text-sm text-vine font-medium mb-1">
@@ -612,7 +625,7 @@ export default async function OrderDetailPage({
                     </p>
                   </div>
                 )}
-                {typedOrder.payment_status === "paid" && !awb && !fulfillmentFailed && typedOrder.shipping_status !== "delivered" && (
+                {typedOrder.payment_status === "paid" && !awb && !fulfillmentFailed && !isInvalidBooking && typedOrder.shipping_status !== "delivered" && (
                   <p className="text-sm text-silver-dark">
                     {typedOrder.shipping_status === "processing" || typedOrder.shipping_status === "packed"
                       ? "Preparing shipment"

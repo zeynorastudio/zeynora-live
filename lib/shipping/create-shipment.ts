@@ -573,23 +573,139 @@ export async function createShipmentForPaidOrder(
     // Create shipment in Shiprocket (auth happens inside createShiprocketOrder)
     const response = await createShiprocketOrder(fulfillmentPayload.shiprocketPayload);
 
-    // Log success
-    console.log("[SHIPMENT_BOOKED]", {
+    // CRITICAL VALIDATION: Check HTTP status code - must be 200 or 201
+    const httpStatus = response.status_code;
+    const isValidHttpStatus = httpStatus === 200 || httpStatus === 201;
+
+    if (!isValidHttpStatus) {
+      console.error("[SHIPMENT_REJECTED]", {
+        order_id: orderId,
+        order_number: order.order_number,
+        http_status: httpStatus,
+        reason: "HTTP status is not 200 or 201",
+        raw_response: response.raw_response?.substring(0, 500),
+        timestamp: new Date().toISOString(),
+      });
+
+      // Mark as FAILED with error details
+      const existingMetadata = (order.metadata as Record<string, unknown>) || {};
+      await supabase
+        .from("orders")
+        .update({
+          shipment_status: "FAILED",
+          metadata: {
+            ...existingMetadata,
+            shipment_error: `Shiprocket API returned HTTP ${httpStatus}`,
+            shipment_status_code: httpStatus,
+            shipment_error_message: response.error_message || `HTTP ${httpStatus}`,
+            shipment_raw_response: response.raw_response,
+            shipment_failed_at: new Date().toISOString(),
+          },
+          updated_at: new Date().toISOString(),
+        } as unknown as never)
+        .eq("id", orderId);
+
+      return {
+        success: false,
+        error: `Shiprocket API returned HTTP ${httpStatus}`,
+      };
+    }
+
+    // CRITICAL VALIDATION: Check for shipment_id or awb_code - at least one must exist
+    const hasShipmentId = response.shipment_id !== null && response.shipment_id !== undefined;
+    const hasAwbCode = response.awb_code !== null && response.awb_code !== undefined && response.awb_code.trim() !== "";
+
+    if (!hasShipmentId && !hasAwbCode) {
+      console.error("[SHIPMENT_REJECTED]", {
+        order_id: orderId,
+        order_number: order.order_number,
+        http_status: httpStatus,
+        reason: "Missing shipment_id and awb_code",
+        shipment_id: response.shipment_id,
+        awb_code: response.awb_code,
+        raw_response: response.raw_response?.substring(0, 500),
+        timestamp: new Date().toISOString(),
+      });
+
+      // Mark as FAILED
+      const existingMetadata = (order.metadata as Record<string, unknown>) || {};
+      await supabase
+        .from("orders")
+        .update({
+          shipment_status: "FAILED",
+          metadata: {
+            ...existingMetadata,
+            shipment_error: "Shiprocket response missing shipment_id and awb_code",
+            shipment_status_code: httpStatus,
+            shipment_error_message: "Response missing required fields: shipment_id and awb_code",
+            shipment_raw_response: response.raw_response,
+            shipment_failed_at: new Date().toISOString(),
+          },
+          updated_at: new Date().toISOString(),
+        } as unknown as never)
+        .eq("id", orderId);
+
+      return {
+        success: false,
+        error: "Shiprocket response missing shipment_id and awb_code",
+      };
+    }
+
+    // HARD GUARD: shipment_id is REQUIRED - throw error if missing
+    if (!hasShipmentId) {
+      const errorMsg = "Shiprocket response missing shipment_id - cannot mark as BOOKED";
+      console.error("[SHIPMENT_REJECTED]", {
+        order_id: orderId,
+        order_number: order.order_number,
+        http_status: httpStatus,
+        reason: "Missing shipment_id (hard guard)",
+        awb_code: response.awb_code,
+        raw_response: response.raw_response?.substring(0, 500),
+        timestamp: new Date().toISOString(),
+      });
+
+      // Mark as FAILED
+      const existingMetadata = (order.metadata as Record<string, unknown>) || {};
+      await supabase
+        .from("orders")
+        .update({
+          shipment_status: "FAILED",
+          metadata: {
+            ...existingMetadata,
+            shipment_error: errorMsg,
+            shipment_status_code: httpStatus,
+            shipment_error_message: errorMsg,
+            shipment_raw_response: response.raw_response,
+            shipment_failed_at: new Date().toISOString(),
+          },
+          updated_at: new Date().toISOString(),
+        } as unknown as never)
+        .eq("id", orderId);
+
+      return {
+        success: false,
+        error: errorMsg,
+      };
+    }
+
+    // All validations passed - log confirmation
+    console.log("[SHIPMENT_CONFIRMED]", {
       order_id: orderId,
       order_number: order.order_number,
+      http_status: httpStatus,
       shipment_id: response.shipment_id,
-      awb_code: response.awb_code,
-      courier_name: response.courier_name,
-      status: response.status,
+      awb_code: response.awb_code || null,
+      courier_name: response.courier_name || null,
+      timestamp: new Date().toISOString(),
     });
 
-    // Store shipment details in database
+    // Store shipment details in database - only after all validations pass
     const existingMetadata = (order.metadata as Record<string, unknown>) || {};
     const { error: updateError } = await supabase
       .from("orders")
       .update({
         shiprocket_shipment_id: String(response.shipment_id),
-        shipment_status: "BOOKED", // Success status
+        shipment_status: "BOOKED", // Success status - only set after validation
         courier_name: response.courier_name || null,
         shipping_status: "processing",
         internal_shipping_cost: internalShippingCost, // Store calculated shipping cost
@@ -665,7 +781,7 @@ export async function createShipmentForPaidOrder(
       timestamp: new Date().toISOString(),
     });
 
-    // Mark order as FAILED (allows retry)
+    // Mark order as FAILED (allows retry) - save error details
     try {
       const existingMetadata = (order.metadata as Record<string, unknown>) || {};
       await supabase
@@ -675,6 +791,7 @@ export async function createShipmentForPaidOrder(
           metadata: {
             ...existingMetadata,
             shipment_error: errorMessage,
+            shipment_error_message: errorMessage,
             shipment_failed_at: new Date().toISOString(),
           },
           updated_at: new Date().toISOString(),

@@ -38,6 +38,9 @@ export default function ShippingPanel({ order, userRole = "admin" }: ShippingPan
   // Check if shipment creation failed
   const shipmentFailed = shipmentStatus === "failed" || metadata.shipment_error;
 
+  // CRITICAL: Check for invalid booking - BOOKED status but no shipment_id
+  const isInvalidBooking = shipmentStatus === "BOOKED" && !shipmentId;
+
   const handleRetryShipment = async () => {
     setLoading(true);
     try {
@@ -103,6 +106,32 @@ export default function ShippingPanel({ order, userRole = "admin" }: ShippingPan
         <Truck className="w-5 h-5 text-gold" /> Shipping
       </h3>
 
+      {/* Invalid Booking Warning - BOOKED but no shipment_id */}
+      {isInvalidBooking && (
+        <div className="mb-4 p-3 bg-orange-50 border border-orange-200 rounded-lg flex items-start gap-2">
+          <AlertCircle className="w-5 h-5 text-orange-600 flex-shrink-0 mt-0.5" />
+          <div className="flex-1">
+            <p className="text-sm font-medium text-orange-900">
+              Invalid booking – retry required
+            </p>
+            <p className="text-xs text-orange-700 mt-1">
+              Order is marked as BOOKED but has no shipment ID. This indicates a booking error.
+            </p>
+            {userRole === "super_admin" && (
+              <AdminButton
+                size="sm"
+                variant="outline"
+                onClick={handleRetryShipment}
+                disabled={loading}
+                className="mt-2"
+              >
+                {loading ? "Retrying..." : "Retry Shipment Creation"}
+              </AdminButton>
+            )}
+          </div>
+        </div>
+      )}
+
       {/* Shipment Failed Warning */}
       {shipmentFailed && (
         <div className="mb-4 p-3 bg-red-50 border border-red-200 rounded-lg flex items-start gap-2">
@@ -139,7 +168,12 @@ export default function ShippingPanel({ order, userRole = "admin" }: ShippingPan
         {/* Shipment Status */}
         <div className="flex justify-between items-center">
           <span className="text-silver-dark">Shipment Status</span>
-          {getShipmentStatusBadge(shipmentStatus)}
+          {/* Hide BOOKED badge if shipment_id is missing (invalid booking) */}
+          {isInvalidBooking ? (
+            <Badge variant="destructive">Invalid Booking</Badge>
+          ) : (
+            getShipmentStatusBadge(shipmentStatus)
+          )}
         </div>
 
         {/* Shipment ID - Visible to all roles */}
