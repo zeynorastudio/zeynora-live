@@ -140,86 +140,110 @@ export interface PayloadValidationResult {
  * Validate Shiprocket payload before API call
  * Ensures all required fields meet Shiprocket's requirements
  * 
- * Validates:
- * - phone matches /^\d{10}$/
- * - pincode matches /^\d{6}$/
- * - weight > 0
- * - length > 0, breadth > 0, height > 0
- * - pickup_location not empty
- * - order_items.length > 0
+ * STEP 2: Strengthened validation with all required fields
  */
 export function validateShiprocketPayload(payload: ShiprocketOrderPayload): PayloadValidationResult {
   const errors: string[] = [];
 
-  // Validate phone (10 digits)
-  if (!payload.shipping_phone || !/^\d{10}$/.test(payload.shipping_phone)) {
-    errors.push(`Invalid shipping phone: must be exactly 10 digits, got "${payload.shipping_phone || "empty"}"`);
+  // Validate pickup_location exactly matches Shiprocket dashboard name
+  if (!payload.pickup_location || !payload.pickup_location.trim()) {
+    errors.push("pickup_location is required and cannot be empty");
+  }
+
+  // Validate billing fields
+  if (!payload.billing_customer_name || !payload.billing_customer_name.trim()) {
+    errors.push("billing_customer_name is required and cannot be empty");
   }
   if (!payload.billing_phone || !/^\d{10}$/.test(payload.billing_phone)) {
-    errors.push(`Invalid billing phone: must be exactly 10 digits, got "${payload.billing_phone || "empty"}"`);
+    errors.push(`billing_phone must be exactly 10 digits, got "${payload.billing_phone || "empty"}"`);
   }
-
-  // Validate pincode (6 digits)
-  if (!payload.shipping_pincode || !/^\d{6}$/.test(payload.shipping_pincode)) {
-    errors.push(`Invalid shipping pincode: must be exactly 6 digits, got "${payload.shipping_pincode || "empty"}"`);
+  if (!payload.billing_email || !payload.billing_email.trim() || !payload.billing_email.includes("@")) {
+    errors.push(`billing_email must be valid (not empty and contain '@'), got "${payload.billing_email || "empty"}"`);
+  }
+  if (!payload.billing_address || !payload.billing_address.trim()) {
+    errors.push("billing_address is required and cannot be empty");
+  }
+  if (!payload.billing_city || !payload.billing_city.trim()) {
+    errors.push("billing_city is required and cannot be empty");
+  }
+  if (!payload.billing_state || !payload.billing_state.trim()) {
+    errors.push("billing_state is required and cannot be empty");
   }
   if (!payload.billing_pincode || !/^\d{6}$/.test(payload.billing_pincode)) {
-    errors.push(`Invalid billing pincode: must be exactly 6 digits, got "${payload.billing_pincode || "empty"}"`);
+    errors.push(`billing_pincode must be exactly 6 digits, got "${payload.billing_pincode || "empty"}"`);
+  }
+  if (!payload.billing_country || !payload.billing_country.trim()) {
+    errors.push("billing_country is required and cannot be empty");
   }
 
-  // Validate weight > 0
-  if (!payload.weight || payload.weight <= 0) {
-    errors.push(`Invalid weight: must be greater than 0, got ${payload.weight}`);
+  // Validate shipping fields (same rules)
+  if (!payload.shipping_customer_name || !payload.shipping_customer_name.trim()) {
+    errors.push("shipping_customer_name is required and cannot be empty");
   }
-
-  // Validate dimensions > 0
-  if (!payload.length || payload.length <= 0) {
-    errors.push(`Invalid length: must be greater than 0, got ${payload.length}`);
+  if (!payload.shipping_phone || !/^\d{10}$/.test(payload.shipping_phone)) {
+    errors.push(`shipping_phone must be exactly 10 digits, got "${payload.shipping_phone || "empty"}"`);
   }
-  if (!payload.breadth || payload.breadth <= 0) {
-    errors.push(`Invalid breadth: must be greater than 0, got ${payload.breadth}`);
+  if (!payload.shipping_email || !payload.shipping_email.trim() || !payload.shipping_email.includes("@")) {
+    errors.push(`shipping_email must be valid (not empty and contain '@'), got "${payload.shipping_email || "empty"}"`);
   }
-  if (!payload.height || payload.height <= 0) {
-    errors.push(`Invalid height: must be greater than 0, got ${payload.height}`);
+  if (!payload.shipping_address || !payload.shipping_address.trim()) {
+    errors.push("shipping_address is required and cannot be empty");
   }
-
-  // Validate pickup_location not empty
-  if (!payload.pickup_location || !payload.pickup_location.trim()) {
-    errors.push("Pickup location is required and cannot be empty");
+  if (!payload.shipping_city || !payload.shipping_city.trim()) {
+    errors.push("shipping_city is required and cannot be empty");
+  }
+  if (!payload.shipping_state || !payload.shipping_state.trim()) {
+    errors.push("shipping_state is required and cannot be empty");
+  }
+  if (!payload.shipping_pincode || !/^\d{6}$/.test(payload.shipping_pincode)) {
+    errors.push(`shipping_pincode must be exactly 6 digits, got "${payload.shipping_pincode || "empty"}"`);
+  }
+  if (!payload.shipping_country || !payload.shipping_country.trim()) {
+    errors.push("shipping_country is required and cannot be empty");
   }
 
   // Validate order_items.length > 0
   if (!payload.order_items || payload.order_items.length === 0) {
-    errors.push("Order must have at least one item");
+    errors.push("order_items.length must be greater than 0");
   }
 
   // Validate each order item
   if (payload.order_items && payload.order_items.length > 0) {
     payload.order_items.forEach((item, index) => {
       if (!item.name || !item.name.trim()) {
-        errors.push(`Item ${index + 1}: name is required`);
+        errors.push(`order_items[${index}].name is required and cannot be empty`);
       }
       if (!item.sku || !item.sku.trim()) {
-        errors.push(`Item ${index + 1}: SKU is required`);
+        errors.push(`order_items[${index}].sku is required and cannot be empty`);
       }
       if (!item.units || item.units <= 0) {
-        errors.push(`Item ${index + 1}: units must be greater than 0`);
+        errors.push(`order_items[${index}].units must be greater than 0, got ${item.units}`);
       }
-      if (item.selling_price === undefined || item.selling_price < 0) {
-        errors.push(`Item ${index + 1}: selling_price must be 0 or greater`);
+      if (item.selling_price === undefined || item.selling_price <= 0) {
+        errors.push(`order_items[${index}].selling_price must be greater than 0, got ${item.selling_price}`);
       }
     });
   }
 
-  // Validate required address fields
-  if (!payload.shipping_address || !payload.shipping_address.trim()) {
-    errors.push("Shipping address is required");
+  // Validate payment_method set correctly
+  if (!payload.payment_method || !["Prepaid", "COD"].includes(payload.payment_method)) {
+    errors.push(`payment_method must be "Prepaid" or "COD", got "${payload.payment_method || "empty"}"`);
   }
-  if (!payload.shipping_city || !payload.shipping_city.trim()) {
-    errors.push("Shipping city is required");
+
+  // Validate weight > 0
+  if (!payload.weight || payload.weight <= 0) {
+    errors.push(`weight must be greater than 0, got ${payload.weight}`);
   }
-  if (!payload.shipping_state || !payload.shipping_state.trim()) {
-    errors.push("Shipping state is required");
+
+  // Validate dimensions > 0
+  if (!payload.length || payload.length <= 0) {
+    errors.push(`length must be greater than 0, got ${payload.length}`);
+  }
+  if (!payload.breadth || payload.breadth <= 0) {
+    errors.push(`breadth must be greater than 0, got ${payload.breadth}`);
+  }
+  if (!payload.height || payload.height <= 0) {
+    errors.push(`height must be greater than 0, got ${payload.height}`);
   }
 
   return {
@@ -286,8 +310,20 @@ export async function prepareFulfillmentPayload(
   // Build billing address (use shipping if not provided)
   const billAddr = billingAddress || shippingAddress;
 
-  // Get email from order.shipping_email (preferred) or fallback to empty string
+  // STEP 1: Validate email from order.shipping_email
   const orderEmail = order.shipping_email || "";
+  
+  // Validate email: not empty and contains "@"
+  if (!orderEmail || !orderEmail.trim() || !orderEmail.includes("@")) {
+    console.error("[FULFILLMENT_EMAIL_VALIDATION_FAILED]", {
+      order_id: order.id,
+      order_number: order.order_number,
+      shipping_email: order.shipping_email,
+      error: "MISSING_EMAIL",
+      timestamp: new Date().toISOString(),
+    });
+    throw new Error("MISSING_EMAIL");
+  }
 
   // Build Shiprocket payload with all required fields
   const shiprocketPayload: ShiprocketOrderPayload = {
@@ -696,7 +732,7 @@ export async function safeCreateAWBIfMissing(orderId: string): Promise<{
     const payloadValidation = validateShiprocketPayload(fulfillmentPayload.shiprocketPayload);
     
     if (!payloadValidation.valid) {
-      const errorMsg = `Invalid payload: ${payloadValidation.errors.join("; ")}`;
+      const errorMsg = `INVALID_PAYLOAD: ${payloadValidation.errors.join("; ")}`;
       
       console.error("[SHIPMENT_PAYLOAD_INVALID]", {
         order_id: orderId,
@@ -716,14 +752,8 @@ export async function safeCreateAWBIfMissing(orderId: string): Promise<{
       };
     }
 
-    // Log valid payload for debugging
-    console.log("[SHIPMENT_PAYLOAD_VALID]", {
-      order_number: order.order_number,
-      weight: fulfillmentPayload.chargeableWeight,
-      dimensions: fulfillmentPayload.packageDimensions,
-      pickup_location: fulfillmentPayload.shiprocketPayload.pickup_location,
-      timestamp: new Date().toISOString(),
-    });
+    // STEP 3: Log final payload ONCE before calling Shiprocket
+    console.log("[SHIPROCKET_FINAL_PAYLOAD]", JSON.stringify(fulfillmentPayload.shiprocketPayload, null, 2));
 
     // Create Shiprocket order
     const response = await createShiprocketOrderForFulfillment(
@@ -784,11 +814,13 @@ export async function safeCreateAWBIfMissing(orderId: string): Promise<{
     });
 
     // Mark as FAILED (allows retry)
-    await markFulfillmentFailed(orderId, order.order_number, errorMessage, error);
+    // If error is MISSING_EMAIL, use that exact error code
+    const finalError = errorMessage === "MISSING_EMAIL" ? "MISSING_EMAIL" : errorMessage;
+    await markFulfillmentFailed(orderId, order.order_number, finalError, error);
 
     return {
       success: false,
-      error: errorMessage || "Fulfillment failed",
+      error: finalError || "Fulfillment failed",
     };
   }
 }
