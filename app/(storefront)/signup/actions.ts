@@ -3,11 +3,11 @@
 import { createServiceRoleClient } from "@/lib/supabase/server";
 import {
   createCustomer,
-  findCustomerByMobile,
+  findCustomerByEmail,
   sanitizeEmail,
   isAdminEmail,
 } from "@/lib/auth/customers";
-import { verifyOtp, normalizePhone } from "@/lib/otp/service";
+import { verifyOtp } from "@/lib/otp/service";
 import { revalidatePath } from "next/cache";
 import { randomBytes } from "crypto";
 
@@ -22,31 +22,34 @@ export interface SignupResult {
  * 
  * Flow:
  * 1. Verify OTP
- * 2. Validate input (mobile, first_name, last_name, email optional)
- * 3. Check if customer already exists by mobile → return error (should use login)
- * 4. Check for admin email collision (if email provided)
+ * 2. Validate input (email required, first_name required, last_name required, phone optional)
+ * 3. Check if customer already exists by email → return error (should use login)
+ * 4. Check for admin email collision
  * 5. Create Supabase Auth user (with random password, never used)
- * 6. Create customer record
+ * 6. Create customer record with email (required) and phone (optional)
  * 7. Merge guest cart/wishlist
  */
 export async function signupAction(formData: FormData): Promise<SignupResult> {
   try {
     // Extract form data
-    const mobile = formData.get("mobile")?.toString() || "";
+    const email = formData.get("email")?.toString() || "";
     const otp = formData.get("otp")?.toString() || "";
     const firstName = formData.get("first_name")?.toString() || "";
     const lastName = formData.get("last_name")?.toString() || "";
-    const email = formData.get("email")?.toString() || "";
+    const phone = formData.get("phone")?.toString() || "";
 
-    // Validation
-    if (!mobile || !otp || !firstName || !lastName) {
-      return { success: false, error: "All required fields must be filled" };
+    // Validation - email, otp, first_name, last_name are required
+    if (!email || !otp || !firstName || !lastName) {
+      return { success: false, error: "Email, OTP, first name, and last name are required" };
     }
 
-    const normalizedMobile = normalizePhone(mobile);
+    // Normalize email (lowercase, trim)
+    const normalizedEmail = email.trim().toLowerCase();
     
-    if (!/^\d{10}$/.test(normalizedMobile)) {
-      return { success: false, error: "Invalid mobile number format" };
+    // Basic email format validation
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (!emailRegex.test(normalizedEmail)) {
+      return { success: false, error: "Invalid email address format" };
     }
 
     if (!/^\d{6}$/.test(otp)) {
@@ -55,7 +58,7 @@ export async function signupAction(formData: FormData): Promise<SignupResult> {
 
     // Verify OTP
     const otpResult = await verifyOtp({
-      mobile: normalizedMobile,
+      email: normalizedEmail,
       otp,
       purpose: "CUSTOMER_AUTH",
     });
@@ -64,41 +67,38 @@ export async function signupAction(formData: FormData): Promise<SignupResult> {
       return { success: false, error: otpResult.error || "Invalid or expired OTP" };
     }
 
-    // Check if customer already exists by mobile
-    const existingCustomer = await findCustomerByMobile(normalizedMobile);
+    // Check if customer already exists by email
+    const existingCustomer = await findCustomerByEmail(normalizedEmail);
     if (existingCustomer) {
       return {
         success: false,
-        error: "An account with this mobile number already exists. Please sign in instead.",
+        error: "An account with this email address already exists. Please sign in instead.",
       };
     }
 
-    // Sanitize email if provided
-    const sanitizedEmail = email.trim() ? sanitizeEmail(email.trim()) : null;
+    // Sanitize email
+    const sanitizedEmail = sanitizeEmail(normalizedEmail);
 
-    // Check for admin email collision if email provided
-    if (sanitizedEmail) {
-      const isAdmin = await isAdminEmail(sanitizedEmail);
-      if (isAdmin) {
-        return {
-          success: false,
-          error: "This email is reserved for admin accounts. Please contact support.",
-        };
-      }
+    // Check for admin email collision
+    const isAdmin = await isAdminEmail(sanitizedEmail);
+    if (isAdmin) {
+      return {
+        success: false,
+        error: "This email is reserved for admin accounts. Please contact support.",
+      };
     }
 
     const serviceSupabase = createServiceRoleClient();
 
     // Create Supabase Auth user with random password (never used, OTP-only)
     const randomPassword = randomBytes(32).toString("hex");
-    const emailForAuth = sanitizedEmail || `${normalizedMobile}@zeynora.local`;
     
     const { data: authData, error: authError } = await serviceSupabase.auth.admin.createUser({
-      email: emailForAuth,
+      email: sanitizedEmail,
       password: randomPassword, // Random password, never exposed to user
       email_confirm: true, // Auto-confirm
       user_metadata: {
-        phone: `+91${normalizedMobile}`,
+        phone: phone || null,
         first_name: firstName,
         last_name: lastName,
       },
@@ -117,13 +117,13 @@ export async function signupAction(formData: FormData): Promise<SignupResult> {
 
     const authUid = authData.user.id;
 
-    // Create customer record
+    // Create customer record with email (required) and phone (optional)
     const customerResult = await createCustomer({
       auth_uid: authUid,
-      email: sanitizedEmail || emailForAuth, // Use provided email or generated one
+      email: sanitizedEmail,
       first_name: firstName.trim(),
       last_name: lastName.trim(),
-      phone: `+91${normalizedMobile}`, // Store in +91XXXXXXXXXX format
+      phone: phone.trim() || null, // Phone is optional
     });
 
     if (customerResult.error || !customerResult.customer) {
@@ -137,7 +137,7 @@ export async function signupAction(formData: FormData): Promise<SignupResult> {
     // Create session by generating magic link and exchanging for session
     const { data: linkData, error: linkError } = await serviceSupabase.auth.admin.generateLink({
       type: "magiclink",
-      email: emailForAuth,
+      email: sanitizedEmail,
     });
 
     if (linkError || !linkData) {

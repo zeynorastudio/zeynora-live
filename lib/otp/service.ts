@@ -9,20 +9,20 @@
 import { randomBytes, createHash } from "crypto";
 import { createServiceRoleClient } from "@/lib/supabase/server";
 import { sendOTPEmail } from "@/lib/email/service";
-import { findCustomerByMobile } from "@/lib/auth/customers";
 
 export type OtpPurpose = "ORDER_TRACKING" | "CUSTOMER_AUTH";
 
 export interface OtpSendParams {
-  mobile: string; // Normalized 10-digit phone number
+  email?: string; // Required for CUSTOMER_AUTH, not used for ORDER_TRACKING
+  mobile?: string; // Required for ORDER_TRACKING, not used for CUSTOMER_AUTH
   purpose: OtpPurpose;
   entity_id?: string; // order_id for ORDER_TRACKING (optional for CUSTOMER_AUTH)
   ip_address?: string;
-  email?: string; // Optional email for OTP delivery (used in signup flow)
 }
 
 export interface OtpVerifyParams {
-  mobile: string;
+  email?: string; // Required for CUSTOMER_AUTH, not used for ORDER_TRACKING
+  mobile?: string; // Required for ORDER_TRACKING, not used for CUSTOMER_AUTH
   otp: string;
   purpose: OtpPurpose;
   entity_id?: string; // order_id for ORDER_TRACKING (optional for CUSTOMER_AUTH)
@@ -116,47 +116,55 @@ function getOtpProvider(): OtpProvider {
 }
 
 /**
- * Send OTP to mobile number
+ * Send OTP
  * 
  * Rules:
  * - OTP validity: 5 minutes
- * - Max resend attempts per order: 3
+ * - Max resend attempts: 3 per hour
  * - Lockout after failures: 15 minutes
  * - OTP is scoped to: order_id + mobile + purpose (for ORDER_TRACKING)
- * - OTP is scoped to: mobile + purpose (for CUSTOMER_AUTH)
+ * - OTP is scoped to: email + purpose (for CUSTOMER_AUTH)
  */
 export async function sendOtp(params: OtpSendParams): Promise<OtpResult> {
   const supabase = createServiceRoleClient();
-  const normalizedMobile = normalizePhone(params.mobile);
   
-  // Validate mobile format
-  if (!/^\d{10}$/.test(normalizedMobile)) {
-    return { success: false, error: "Invalid mobile number format" };
-  }
-  
-  // Check rate limiting
-  const rateLimitCheck = await checkRateLimit({
-    identifier: normalizedMobile,
-    identifierType: "mobile",
-    action: "request_otp",
-    supabase,
-  });
-  
-  if (!rateLimitCheck.allowed) {
-    return {
-      success: false,
-      error: "Too many requests. Please try again later.",
-      locked_until: rateLimitCheck.lockedUntil,
-    };
-  }
-  
-  // Handle CUSTOMER_AUTH purpose (no order validation needed)
+  // Handle CUSTOMER_AUTH purpose (email-based)
   if (params.purpose === "CUSTOMER_AUTH") {
+    // Validate email is provided
+    if (!params.email || typeof params.email !== "string") {
+      return { success: false, error: "Email address is required" };
+    }
+    
+    // Normalize email (lowercase, trim)
+    const normalizedEmail = params.email.trim().toLowerCase();
+    
+    // Basic email format validation
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (!emailRegex.test(normalizedEmail)) {
+      return { success: false, error: "Invalid email address format" };
+    }
+    
+    // Check rate limiting (by email)
+    const rateLimitCheck = await checkRateLimit({
+      identifier: normalizedEmail,
+      identifierType: "email",
+      action: "request_otp",
+      supabase,
+    });
+    
+    if (!rateLimitCheck.allowed) {
+      return {
+        success: false,
+        error: "Too many requests. Please try again later.",
+        locked_until: rateLimitCheck.lockedUntil,
+      };
+    }
+    
     // Check for existing unverified OTP
     const { data: existingOtp } = await supabase
       .from("customer_auth_otps")
       .select("id, attempts, max_attempts, locked_until, created_at")
-      .eq("mobile", normalizedMobile)
+      .eq("email", normalizedEmail)
       .eq("purpose", params.purpose)
       .eq("verified", false)
       .gt("expires_at", new Date().toISOString())
@@ -180,7 +188,7 @@ export async function sendOtp(params: OtpSendParams): Promise<OtpResult> {
     const { count: resendCount } = await supabase
       .from("customer_auth_otps")
       .select("*", { count: "exact", head: true })
-      .eq("mobile", normalizedMobile)
+      .eq("email", normalizedEmail)
       .eq("purpose", params.purpose)
       .gte("created_at", new Date(Date.now() - 3600000).toISOString()); // Last hour
     
@@ -197,11 +205,11 @@ export async function sendOtp(params: OtpSendParams): Promise<OtpResult> {
     const expiresAt = new Date();
     expiresAt.setMinutes(expiresAt.getMinutes() + 5); // 5 minutes validity
     
-    // Store OTP (hashed)
+    // Store OTP (hashed) with email
     const { error: insertError } = await supabase
       .from("customer_auth_otps")
       .insert({
-        mobile: normalizedMobile,
+        email: normalizedEmail,
         otp_hash: otpHash,
         purpose: params.purpose,
         expires_at: expiresAt.toISOString(),
@@ -216,44 +224,54 @@ export async function sendOtp(params: OtpSendParams): Promise<OtpResult> {
       return { success: false, error: "Unable to process request" };
     }
     
-    // Send OTP via email (Resend)
-    // Determine recipient email: use provided email (signup) or look up by mobile (login)
-    let recipientEmail: string | null = null;
-    
-    if (params.email) {
-      // Email provided (signup flow)
-      recipientEmail = params.email.trim().toLowerCase();
-    } else {
-      // Look up customer email by mobile (login flow)
-      const customer = await findCustomerByMobile(normalizedMobile);
-      recipientEmail = customer?.email || null;
-    }
-    
-    if (!recipientEmail) {
-      return { success: false, error: "Email address required for OTP delivery" };
-    }
-    
     // Send OTP email via Resend
-    const emailSent = await sendOTPEmail(recipientEmail, otp, 5);
+    const emailSent = await sendOTPEmail(normalizedEmail, otp, 5);
     
     if (!emailSent) {
       console.error("[OTP] Failed to send OTP email:", {
-        mobile: normalizedMobile.substring(0, 3) + "***",
-        email: recipientEmail.substring(0, 3) + "***",
+        email: normalizedEmail.substring(0, 3) + "***",
       });
       // If OTP email fails, authentication must fail (per requirements)
       return { success: false, error: "Unable to send OTP. Please try again." };
     }
     
-    // Record rate limit
+    // Record rate limit (by email)
     await recordRateLimit({
-      identifier: normalizedMobile,
-      identifierType: "mobile",
+      identifier: normalizedEmail,
+      identifierType: "email",
       action: "request_otp",
       supabase,
     });
     
     return { success: true };
+  }
+  
+  // Handle ORDER_TRACKING purpose (mobile-based, unchanged)
+  if (!params.mobile) {
+    return { success: false, error: "Mobile number is required for order tracking" };
+  }
+  
+  const normalizedMobile = normalizePhone(params.mobile);
+  
+  // Validate mobile format
+  if (!/^\d{10}$/.test(normalizedMobile)) {
+    return { success: false, error: "Invalid mobile number format" };
+  }
+  
+  // Check rate limiting (by mobile)
+  const rateLimitCheck = await checkRateLimit({
+    identifier: normalizedMobile,
+    identifierType: "mobile",
+    action: "request_otp",
+    supabase,
+  });
+  
+  if (!rateLimitCheck.allowed) {
+    return {
+      success: false,
+      error: "Too many requests. Please try again later.",
+      locked_until: rateLimitCheck.lockedUntil,
+    };
   }
   
   // Handle ORDER_TRACKING purpose (existing logic)
@@ -382,36 +400,44 @@ export async function sendOtp(params: OtpSendParams): Promise<OtpResult> {
  */
 export async function verifyOtp(params: OtpVerifyParams): Promise<OtpResult & { token?: string }> {
   const supabase = createServiceRoleClient();
-  const normalizedMobile = normalizePhone(params.mobile);
   
-  // Validate mobile format
-  if (!/^\d{10}$/.test(normalizedMobile)) {
-    return { success: false, error: "Invalid mobile number format" };
-  }
-  
-  // Check rate limiting
-  const rateLimitCheck = await checkRateLimit({
-    identifier: normalizedMobile,
-    identifierType: "mobile",
-    action: "verify_otp",
-    supabase,
-  });
-  
-  if (!rateLimitCheck.allowed) {
-    return {
-      success: false,
-      error: "Too many attempts. Please try again later.",
-      locked_until: rateLimitCheck.lockedUntil,
-    };
-  }
-  
-  // Handle CUSTOMER_AUTH purpose
+  // Handle CUSTOMER_AUTH purpose (email-based)
   if (params.purpose === "CUSTOMER_AUTH") {
+    // Validate email is provided
+    if (!params.email || typeof params.email !== "string") {
+      return { success: false, error: "Email address is required" };
+    }
+    
+    // Normalize email (lowercase, trim)
+    const normalizedEmail = params.email.trim().toLowerCase();
+    
+    // Basic email format validation
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (!emailRegex.test(normalizedEmail)) {
+      return { success: false, error: "Invalid email address format" };
+    }
+    
+    // Check rate limiting (by email)
+    const rateLimitCheck = await checkRateLimit({
+      identifier: normalizedEmail,
+      identifierType: "email",
+      action: "verify_otp",
+      supabase,
+    });
+    
+    if (!rateLimitCheck.allowed) {
+      return {
+        success: false,
+        error: "Too many attempts. Please try again later.",
+        locked_until: rateLimitCheck.lockedUntil,
+      };
+    }
+    
     // Find unverified OTP
     const { data: otpRecord, error: otpError } = await supabase
       .from("customer_auth_otps")
       .select("*")
-      .eq("mobile", normalizedMobile)
+      .eq("email", normalizedEmail)
       .eq("purpose", params.purpose)
       .eq("verified", false)
       .gt("expires_at", new Date().toISOString())
@@ -425,6 +451,7 @@ export async function verifyOtp(params: OtpVerifyParams): Promise<OtpResult & { 
     
     const typedOtpRecord = otpRecord as {
       id: string;
+      email: string;
       otp_hash: string;
       attempts: number;
       max_attempts: number;
@@ -498,11 +525,47 @@ export async function verifyOtp(params: OtpVerifyParams): Promise<OtpResult & { 
       .eq("id", typedOtpRecord.id);
     
     console.log("[OTP_VERIFIED]", {
-      mobile: normalizedMobile.substring(0, 3) + "***", // Masked
+      email: normalizedEmail.substring(0, 3) + "***", // Masked
       purpose: params.purpose,
     });
     
+    // Record rate limit (by email)
+    await recordRateLimit({
+      identifier: normalizedEmail,
+      identifierType: "email",
+      action: "verify_otp",
+      supabase,
+    });
+    
     return { success: true };
+  }
+  
+  // Handle ORDER_TRACKING purpose (mobile-based, unchanged)
+  if (!params.mobile) {
+    return { success: false, error: "Mobile number is required for order tracking" };
+  }
+  
+  const normalizedMobile = normalizePhone(params.mobile);
+  
+  // Validate mobile format
+  if (!/^\d{10}$/.test(normalizedMobile)) {
+    return { success: false, error: "Invalid mobile number format" };
+  }
+  
+  // Check rate limiting (by mobile)
+  const rateLimitCheck = await checkRateLimit({
+    identifier: normalizedMobile,
+    identifierType: "mobile",
+    action: "verify_otp",
+    supabase,
+  });
+  
+  if (!rateLimitCheck.allowed) {
+    return {
+      success: false,
+      error: "Too many attempts. Please try again later.",
+      locked_until: rateLimitCheck.lockedUntil,
+    };
   }
   
   // Handle ORDER_TRACKING purpose (existing logic)
@@ -639,7 +702,7 @@ export interface RateLimitCheck {
 
 export async function checkRateLimit(params: {
   identifier: string;
-  identifierType: "ip" | "mobile" | "order_id";
+  identifierType: "ip" | "mobile" | "order_id" | "email";
   action: "request_otp" | "verify_otp" | "view_tracking";
   supabase: ReturnType<typeof createServiceRoleClient>;
 }): Promise<RateLimitCheck> {
@@ -679,7 +742,7 @@ export async function checkRateLimit(params: {
 
 export async function recordRateLimit(params: {
   identifier: string;
-  identifierType: "ip" | "mobile" | "order_id";
+  identifierType: "ip" | "mobile" | "order_id" | "email";
   action: "request_otp" | "verify_otp" | "view_tracking";
   supabase: ReturnType<typeof createServiceRoleClient>;
 }): Promise<void> {

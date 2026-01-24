@@ -2,8 +2,8 @@
 
 import { createServerClient } from "@/lib/supabase/server";
 import { createServiceRoleClient } from "@/lib/supabase/server";
-import { findCustomerByMobile, findOrCreateCustomerForAuthUid } from "@/lib/auth/customers";
-import { verifyOtp, normalizePhone } from "@/lib/otp/service";
+import { findCustomerByEmail, findOrCreateCustomerForAuthUid } from "@/lib/auth/customers";
+import { verifyOtp } from "@/lib/otp/service";
 import { revalidatePath } from "next/cache";
 import { randomBytes } from "crypto";
 
@@ -18,7 +18,7 @@ export interface LoginResult {
  * 
  * Flow:
  * 1. Verify OTP
- * 2. Find customer by mobile
+ * 2. Find customer by email
  * 3. If customer exists and has auth_uid → create session
  * 4. If customer exists but no auth_uid → create auth user and link
  * 5. If customer doesn't exist → return error (should use signup)
@@ -26,17 +26,20 @@ export interface LoginResult {
  */
 export async function loginAction(formData: FormData): Promise<LoginResult> {
   try {
-    const mobile = formData.get("mobile")?.toString() || "";
+    const email = formData.get("email")?.toString() || "";
     const otp = formData.get("otp")?.toString() || "";
 
-    if (!mobile || !otp) {
-      return { success: false, error: "Mobile number and OTP are required" };
+    if (!email || !otp) {
+      return { success: false, error: "Email address and OTP are required" };
     }
 
-    const normalizedMobile = normalizePhone(mobile);
+    // Normalize email (lowercase, trim)
+    const normalizedEmail = email.trim().toLowerCase();
     
-    if (!/^\d{10}$/.test(normalizedMobile)) {
-      return { success: false, error: "Invalid mobile number format" };
+    // Basic email format validation
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (!emailRegex.test(normalizedEmail)) {
+      return { success: false, error: "Invalid email address format" };
     }
 
     if (!/^\d{6}$/.test(otp)) {
@@ -45,7 +48,7 @@ export async function loginAction(formData: FormData): Promise<LoginResult> {
 
     // Verify OTP
     const otpResult = await verifyOtp({
-      mobile: normalizedMobile,
+      email: normalizedEmail,
       otp,
       purpose: "CUSTOMER_AUTH",
     });
@@ -54,13 +57,13 @@ export async function loginAction(formData: FormData): Promise<LoginResult> {
       return { success: false, error: otpResult.error || "Invalid or expired OTP" };
     }
 
-    // Find customer by mobile
-    const customer = await findCustomerByMobile(normalizedMobile);
+    // Find customer by email
+    const customer = await findCustomerByEmail(normalizedEmail);
 
     if (!customer) {
       return {
         success: false,
-        error: "No account found with this mobile number. Please sign up first.",
+        error: "No account found with this email address. Please sign up first.",
       };
     }
 
@@ -75,11 +78,11 @@ export async function loginAction(formData: FormData): Promise<LoginResult> {
       const randomPassword = randomBytes(32).toString("hex");
       
       const { data: authData, error: authError } = await serviceSupabase.auth.admin.createUser({
-        email: customer.email || `${normalizedMobile}@zeynora.local`, // Use mobile as email if no email
+        email: customer.email,
         password: randomPassword, // Random password, never exposed to user
         email_confirm: true,
         user_metadata: {
-          phone: `+91${normalizedMobile}`,
+          phone: customer.phone || null,
           first_name: customer.first_name,
           last_name: customer.last_name,
         },
@@ -113,7 +116,7 @@ export async function loginAction(formData: FormData): Promise<LoginResult> {
     // Create session by signing in with the auth user's email
     // Note: We use a server-side sign-in with a random password that was set during user creation
     // The password is never exposed to the client - this is OTP-only from user's perspective
-    const emailForAuth = customer.email || `${normalizedMobile}@zeynora.local`;
+    const emailForAuth = customer.email;
     
     // Use admin API to get user and reset password to a new random one, then sign in
     // Actually, we'll use a simpler approach: generate a magic link and exchange it for a session

@@ -2,27 +2,26 @@
  * POST /api/auth/customer/verify-otp
  * Verify OTP for customer authentication
  * 
- * Body: { mobile: string, otp: string }
+ * Body: { email: string, otp: string }
  * 
  * On success, returns customer info if exists, or indicates new customer creation needed
  */
 
 import { NextRequest, NextResponse } from "next/server";
 import { verifyOtp } from "@/lib/otp/service";
-import { findCustomerByMobile } from "@/lib/auth/customers";
-import { normalizePhone } from "@/lib/otp/service";
+import { findCustomerByEmail } from "@/lib/auth/customers";
 
 export const dynamic = "force-dynamic";
 
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json();
-    const { mobile, otp } = body;
+    const { email, otp } = body;
     
     // Validation
-    if (!mobile || typeof mobile !== "string") {
+    if (!email || typeof email !== "string") {
       return NextResponse.json(
-        { success: false, error: "Mobile number is required" },
+        { success: false, error: "Email address is required" },
         { status: 400 }
       );
     }
@@ -41,7 +40,7 @@ export async function POST(req: NextRequest) {
     
     // Verify OTP
     const result = await verifyOtp({
-      mobile,
+      email,
       otp,
       purpose: "CUSTOMER_AUTH",
       ip_address: ipAddress,
@@ -55,14 +54,16 @@ export async function POST(req: NextRequest) {
     }
     
     // OTP verified - check if customer exists
-    const normalizedMobile = normalizePhone(mobile);
-    const customer = await findCustomerByMobile(normalizedMobile);
+    const normalizedEmail = email.trim().toLowerCase();
+    const customer = await findCustomerByEmail(normalizedEmail);
     
     return NextResponse.json({
       success: true,
       customer_exists: customer !== null,
+      requiresSignup: customer === null,
       customer_id: customer?.id || null,
       auth_uid: customer?.auth_uid || null,
+      email: normalizedEmail,
     });
   } catch (error: unknown) {
     console.error("[CUSTOMER_AUTH] OTP verification error:", error);

@@ -2,7 +2,7 @@
  * POST /api/auth/customer/complete-login
  * Complete login by creating Supabase Auth session after OTP verification
  * 
- * Body: { mobile: string, customer_id: string }
+ * Body: { email: string, customer_id: string }
  * 
  * This route creates a session for the customer by:
  * 1. Finding the customer's auth_uid
@@ -13,20 +13,19 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createServerClient } from "@/lib/supabase/server";
 import { createServiceRoleClient } from "@/lib/supabase/server";
-import { findCustomerByMobile, findCustomerByAuthUid } from "@/lib/auth/customers";
-import { normalizePhone } from "@/lib/otp/service";
+import { findCustomerByEmail, findCustomerByAuthUid } from "@/lib/auth/customers";
 
 export const dynamic = "force-dynamic";
 
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json();
-    const { mobile, customer_id } = body;
+    const { email, customer_id } = body;
     
     // Validation
-    if (!mobile || typeof mobile !== "string") {
+    if (!email || typeof email !== "string") {
       return NextResponse.json(
-        { success: false, error: "Mobile number is required" },
+        { success: false, error: "Email address is required" },
         { status: 400 }
       );
     }
@@ -38,11 +37,22 @@ export async function POST(req: NextRequest) {
       );
     }
     
-    const normalizedMobile = normalizePhone(mobile);
+    // Normalize email (lowercase, trim)
+    const normalizedEmail = email.trim().toLowerCase();
+    
+    // Basic email format validation
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (!emailRegex.test(normalizedEmail)) {
+      return NextResponse.json(
+        { success: false, error: "Invalid email address format" },
+        { status: 400 }
+      );
+    }
+    
     const serviceSupabase = createServiceRoleClient();
     
     // Find customer
-    const customer = await findCustomerByMobile(normalizedMobile);
+    const customer = await findCustomerByEmail(normalizedEmail);
     
     if (!customer || customer.id !== customer_id) {
       return NextResponse.json(
@@ -59,10 +69,9 @@ export async function POST(req: NextRequest) {
     }
     
     // Generate magic link for session creation
-    const emailForAuth = customer.email || `${normalizedMobile}@zeynora.local`;
     const { data: linkData, error: linkError } = await serviceSupabase.auth.admin.generateLink({
       type: "magiclink",
-      email: emailForAuth,
+      email: customer.email,
     });
     
     if (linkError || !linkData) {
