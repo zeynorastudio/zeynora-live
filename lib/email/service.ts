@@ -11,9 +11,16 @@ import { Resend } from "resend";
 import { createServiceRoleClient } from "@/lib/supabase/server";
 
 const RESEND_API_KEY = process.env.RESEND_API_KEY;
-const RESEND_FROM_EMAIL = process.env.RESEND_FROM_EMAIL || "noreply@zeynora.com";
 const RESEND_FROM_NAME = process.env.RESEND_FROM_NAME || "ZEYNORA";
 const SITE_URL = process.env.NEXT_PUBLIC_SITE_URL || "https://zeynora.com";
+
+// Auth email sender configuration
+const RESEND_AUTH_FROM_EMAIL = process.env.RESEND_AUTH_FROM_EMAIL;
+const RESEND_AUTH_FROM_NAME = process.env.RESEND_AUTH_FROM_NAME || "Auth";
+
+// Orders email sender configuration
+const RESEND_ORDERS_FROM_EMAIL = process.env.RESEND_ORDERS_FROM_EMAIL;
+const RESEND_ORDERS_FROM_NAME = process.env.RESEND_ORDERS_FROM_NAME || "Zeynora Orders";
 
 // Initialize Resend client
 let resendClient: Resend | null = null;
@@ -26,6 +33,28 @@ function getResendClient(): Resend {
     resendClient = new Resend(RESEND_API_KEY);
   }
   return resendClient;
+}
+
+/**
+ * Get sender identity for auth emails
+ * Format: "Name <email@example.com>"
+ */
+function getAuthSender(): string {
+  if (!RESEND_AUTH_FROM_EMAIL) {
+    throw new Error("RESEND_AUTH_FROM_EMAIL is required but not configured");
+  }
+  return `${RESEND_AUTH_FROM_NAME} <${RESEND_AUTH_FROM_EMAIL}>`;
+}
+
+/**
+ * Get sender identity for order emails
+ * Format: "Name <email@example.com>"
+ */
+function getOrdersSender(): string {
+  if (!RESEND_ORDERS_FROM_EMAIL) {
+    throw new Error("RESEND_ORDERS_FROM_EMAIL is required but not configured");
+  }
+  return `${RESEND_ORDERS_FROM_NAME} <${RESEND_ORDERS_FROM_EMAIL}>`;
 }
 
 /**
@@ -307,9 +336,10 @@ export async function sendOTPEmail(
   try {
     const client = getResendClient();
     const { subject, html, text } = buildOtpEmailTemplate({ otp, expiresIn });
+    const fromSender = getAuthSender();
 
     const result = await client.emails.send({
-      from: `${RESEND_FROM_NAME} <${RESEND_FROM_EMAIL}>`,
+      from: fromSender,
       to: [email],
       subject,
       html,
@@ -480,8 +510,9 @@ export async function sendOrderConfirmationEmail(orderId: string): Promise<boole
     });
 
     const client = getResendClient();
+    const fromSender = getOrdersSender();
     const result = await client.emails.send({
-      from: `${RESEND_FROM_NAME} <${RESEND_FROM_EMAIL}>`,
+      from: fromSender,
       to: [typedUser.email],
       subject,
       html,
