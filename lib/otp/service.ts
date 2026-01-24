@@ -8,6 +8,8 @@
 
 import { randomBytes, createHash } from "crypto";
 import { createServiceRoleClient } from "@/lib/supabase/server";
+import { sendOTPEmail } from "@/lib/email/service";
+import { findCustomerByMobile } from "@/lib/auth/customers";
 
 export type OtpPurpose = "ORDER_TRACKING" | "CUSTOMER_AUTH";
 
@@ -16,6 +18,7 @@ export interface OtpSendParams {
   purpose: OtpPurpose;
   entity_id?: string; // order_id for ORDER_TRACKING (optional for CUSTOMER_AUTH)
   ip_address?: string;
+  email?: string; // Optional email for OTP delivery (used in signup flow)
 }
 
 export interface OtpVerifyParams {
@@ -95,7 +98,8 @@ class MockOtpProvider implements OtpProvider {
 
 /**
  * Get OTP provider instance
- * When API keys are available, replace MockOtpProvider with actual provider
+ * Currently uses MockOtpProvider for development/testing
+ * To add a real provider, implement the OtpProvider interface and update this function
  */
 function getOtpProvider(): OtpProvider {
   // Check for provider API keys
@@ -105,14 +109,8 @@ function getOtpProvider(): OtpProvider {
     return new MockOtpProvider();
   }
   
-  // TODO: When API keys are available, instantiate actual provider
-  // Example:
-  // if (providerType === "twilio") {
-  //   return new TwilioOtpProvider();
-  // }
-  // if (providerType === "msg91") {
-  //   return new Msg91OtpProvider();
-  // }
+  // Real provider implementations can be added here when needed
+  // They must implement the OtpProvider interface
   
   return new MockOtpProvider();
 }
@@ -218,15 +216,32 @@ export async function sendOtp(params: OtpSendParams): Promise<OtpResult> {
       return { success: false, error: "Unable to process request" };
     }
     
-    // Send OTP via provider
-    const provider = getOtpProvider();
-    const sendResult = await provider.send({
-      mobile: normalizedMobile,
-      otp,
-      purpose: params.purpose,
-    });
+    // Send OTP via email (Resend)
+    // Determine recipient email: use provided email (signup) or look up by mobile (login)
+    let recipientEmail: string | null = null;
     
-    if (!sendResult.success) {
+    if (params.email) {
+      // Email provided (signup flow)
+      recipientEmail = params.email.trim().toLowerCase();
+    } else {
+      // Look up customer email by mobile (login flow)
+      const customer = await findCustomerByMobile(normalizedMobile);
+      recipientEmail = customer?.email || null;
+    }
+    
+    if (!recipientEmail) {
+      return { success: false, error: "Email address required for OTP delivery" };
+    }
+    
+    // Send OTP email via Resend
+    const emailSent = await sendOTPEmail(recipientEmail, otp, 5);
+    
+    if (!emailSent) {
+      console.error("[OTP] Failed to send OTP email:", {
+        mobile: normalizedMobile.substring(0, 3) + "***",
+        email: recipientEmail.substring(0, 3) + "***",
+      });
+      // If OTP email fails, authentication must fail (per requirements)
       return { success: false, error: "Unable to send OTP. Please try again." };
     }
     
@@ -481,6 +496,11 @@ export async function verifyOtp(params: OtpVerifyParams): Promise<OtpResult & { 
         updated_at: new Date().toISOString(),
       } as unknown as never)
       .eq("id", typedOtpRecord.id);
+    
+    console.log("[OTP_VERIFIED]", {
+      mobile: normalizedMobile.substring(0, 3) + "***", // Masked
+      purpose: params.purpose,
+    });
     
     return { success: true };
   }

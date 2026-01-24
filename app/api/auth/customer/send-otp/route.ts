@@ -2,7 +2,9 @@
  * POST /api/auth/customer/send-otp
  * Send OTP for customer authentication
  * 
- * Body: { mobile: string }
+ * Body: { mobile: string, email?: string }
+ * - mobile: Required - mobile number for OTP
+ * - email: Optional - email address for OTP delivery (required for signup flow)
  */
 
 import { NextRequest, NextResponse } from "next/server";
@@ -13,7 +15,7 @@ export const dynamic = "force-dynamic";
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json();
-    const { mobile } = body;
+    const { mobile, email } = body;
     
     // Validation
     if (!mobile || typeof mobile !== "string") {
@@ -28,9 +30,10 @@ export async function POST(req: NextRequest) {
                      req.headers.get("x-real-ip") || 
                      "unknown";
     
-    // Send OTP
+    // Send OTP (email parameter passed for signup flow)
     const result = await sendOtp({
       mobile,
+      email, // Optional - used for signup flow when customer doesn't exist yet
       purpose: "CUSTOMER_AUTH",
       ip_address: ipAddress,
     });

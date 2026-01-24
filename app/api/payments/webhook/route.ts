@@ -346,7 +346,7 @@ export async function POST(req: NextRequest) {
     const { data: orderData, error: findError } = await supabase
       .from("orders")
       .select(
-        "id, user_id, order_status, payment_status, payment_provider_response, razorpay_order_id, payment_method, paid_at, metadata, created_at"
+        "id, user_id, order_number, order_status, payment_status, payment_provider_response, razorpay_order_id, payment_method, paid_at, metadata, created_at"
       )
       .eq("razorpay_order_id", razorpayOrderId)
       .single();
@@ -376,6 +376,7 @@ export async function POST(req: NextRequest) {
     const order = orderData as {
       id: string;
       user_id: string | null;
+      order_number: string;
       order_status: string;
       payment_status: string;
       payment_provider_response: Record<string, unknown> | null;
@@ -506,6 +507,29 @@ export async function POST(req: NextRequest) {
             error: shippingCostError instanceof Error ? shippingCostError.message : "Unknown error",
           });
           // Don't fail - order is still PAID
+        }
+
+        // ============================================
+        // STEP 6: SEND ORDER CONFIRMATION EMAIL
+        // Idempotent - safe to retry
+        // Never blocks payment processing
+        // ============================================
+        try {
+          const { sendOrderConfirmationEmail } = await import("@/lib/email/service");
+          const emailSent = await sendOrderConfirmationEmail(order.id);
+          if (!emailSent) {
+            console.warn("[PAYMENT_CAPTURED] Order confirmation email not sent:", {
+              order_id: order.id,
+              order_number: order.order_number,
+            });
+          }
+        } catch (emailError) {
+          // Don't fail payment if email fails
+          console.error("[PAYMENT_CAPTURED] Failed to send order confirmation email:", {
+            order_id: order.id,
+            order_number: order.order_number,
+            error: emailError instanceof Error ? emailError.message : "Unknown error",
+          });
         }
 
         // ============================================

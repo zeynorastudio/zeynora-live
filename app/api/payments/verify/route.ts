@@ -130,7 +130,7 @@ export async function POST(req: NextRequest) {
 
       // Send order confirmation email for credits-only orders (non-blocking)
       try {
-        const { sendOrderConfirmationEmail } = await import("@/lib/email/order-confirmation");
+        const { sendOrderConfirmationEmail } = await import("@/lib/email/service");
         const emailSent = await sendOrderConfirmationEmail(typedOrder.id);
         if (!emailSent) {
           console.warn("[PAYMENT_VERIFY] Order confirmation email not sent (credits-only):", {
@@ -363,7 +363,7 @@ export async function POST(req: NextRequest) {
 
     // Send order confirmation email (non-blocking)
     try {
-      const { sendOrderConfirmationEmail } = await import("@/lib/email/order-confirmation");
+      const { sendOrderConfirmationEmail } = await import("@/lib/email/service");
       const emailSent = await sendOrderConfirmationEmail(order.id);
       if (!emailSent) {
         console.warn("[PAYMENT_VERIFY] Order confirmation email not sent:", {

@@ -137,26 +137,3 @@ export function getShippingStatusBadgeVariant(
     return "vine";
   return "outline";
 }
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
