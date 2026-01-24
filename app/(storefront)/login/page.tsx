@@ -9,25 +9,22 @@ export default function LoginPage() {
   const searchParams = useSearchParams();
   const [isPending, startTransition] = useTransition();
 
-  const [step, setStep] = useState<"mobile" | "otp">("mobile");
-  const [mobile, setMobile] = useState("");
+  const [step, setStep] = useState<"email" | "otp">("email");
+  const [email, setEmail] = useState("");
   const [otp, setOtp] = useState("");
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [serverError, setServerError] = useState<string | null>(null);
   const [otpSent, setOtpSent] = useState(false);
 
-  const normalizeMobile = (phone: string): string => {
-    const digits = phone.replace(/\D/g, "");
-    if (digits.length === 12 && digits.startsWith("91")) {
-      return digits.slice(2);
-    }
-    return digits.slice(-10);
+  const validateEmail = (email: string): boolean => {
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    return emailRegex.test(email.trim());
   };
 
   const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const { name, value } = e.target;
-    if (name === "mobile") {
-      setMobile(value);
+    if (name === "email") {
+      setEmail(value);
     } else if (name === "otp") {
       const digitsOnly = value.replace(/\D/g, "").slice(0, 6);
       setOtp(digitsOnly);
@@ -43,10 +40,10 @@ export default function LoginPage() {
 
   const handleSendOtp = async () => {
     setServerError(null);
-    const normalized = normalizeMobile(mobile);
+    const normalizedEmail = email.trim().toLowerCase();
     
-    if (!normalized || normalized.length !== 10) {
-      setErrors({ mobile: "Please enter a valid 10-digit mobile number" });
+    if (!normalizedEmail || !validateEmail(normalizedEmail)) {
+      setErrors({ email: "Please enter a valid email address" });
       return;
     }
 
@@ -54,7 +51,7 @@ export default function LoginPage() {
       const response = await fetch("/api/auth/customer/send-otp", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ mobile: normalized }),
+        body: JSON.stringify({ email: normalizedEmail }),
       });
 
       const data = await response.json();
@@ -76,12 +73,12 @@ export default function LoginPage() {
     e.preventDefault();
     setServerError(null);
 
-    if (step === "mobile") {
+    if (step === "email") {
       await handleSendOtp();
       return;
     }
 
-    const normalized = normalizeMobile(mobile);
+    const normalizedEmail = email.trim().toLowerCase();
     
     if (!otp || !/^\d{6}$/.test(otp)) {
       setErrors({ otp: "Please enter a valid 6-digit OTP" });
@@ -90,7 +87,7 @@ export default function LoginPage() {
 
     startTransition(async () => {
       const formDataToSend = new FormData();
-      formDataToSend.append("mobile", normalized);
+      formDataToSend.append("email", normalizedEmail);
       formDataToSend.append("otp", otp);
 
       const result = await loginAction(formDataToSend);
@@ -126,37 +123,33 @@ export default function LoginPage() {
           )}
 
           <form onSubmit={handleSubmit} className="space-y-5">
-            {step === "mobile" ? (
+            {step === "email" ? (
               <>
                 <div>
                   <label
-                    htmlFor="mobile"
+                    htmlFor="email"
                     className="block text-sm font-medium text-night mb-1.5"
                   >
-                    Mobile Number <span className="text-red-500">*</span>
+                    Email Address <span className="text-red-500">*</span>
                   </label>
                   <input
-                    id="mobile"
-                    name="mobile"
-                    type="tel"
-                    value={mobile}
+                    id="email"
+                    name="email"
+                    type="email"
+                    value={email}
                     onChange={handleChange}
                     required
                     disabled={isPending}
                     className={`w-full px-4 py-2.5 border rounded-md focus:outline-none focus:ring-2 focus:ring-gold focus:border-gold disabled:bg-silver-light text-night ${
-                      errors.mobile ? "border-red-300" : "border-bronze/30"
+                      errors.email ? "border-red-300" : "border-bronze/30"
                     }`}
-                    placeholder="+919876543210"
-                    aria-invalid={!!errors.mobile}
-                    aria-describedby={errors.mobile ? "mobile-error" : "mobile-help"}
+                    placeholder="name@example.com"
+                    aria-invalid={!!errors.email}
+                    aria-describedby={errors.email ? "email-error" : undefined}
                   />
-                  {errors.mobile ? (
-                    <p id="mobile-error" className="mt-1 text-xs text-red-600">
-                      {errors.mobile}
-                    </p>
-                  ) : (
-                    <p id="mobile-help" className="mt-1 text-xs text-silver-dark">
-                      Format: +91 followed by 10 digits
+                  {errors.email && (
+                    <p id="email-error" className="mt-1 text-xs text-red-600">
+                      {errors.email}
                     </p>
                   )}
                 </div>
@@ -200,7 +193,7 @@ export default function LoginPage() {
                     </p>
                   ) : (
                     <p id="otp-help" className="mt-1 text-xs text-silver-dark">
-                      Enter the 6-digit OTP sent to +91 {normalizeMobile(mobile).substring(0, 3)}****{normalizeMobile(mobile).substring(7)}
+                      Enter the 6-digit OTP sent to {email.includes("@") ? `${email.substring(0, Math.min(3, email.indexOf("@")))}***${email.substring(email.indexOf("@"))}` : email.substring(0, 3) + "***"}
                     </p>
                   )}
                 </div>
@@ -217,7 +210,7 @@ export default function LoginPage() {
                   <button
                     type="button"
                     onClick={() => {
-                      setStep("mobile");
+                      setStep("email");
                       setOtp("");
                       setOtpSent(false);
                       setErrors({});
@@ -226,7 +219,7 @@ export default function LoginPage() {
                     className="text-sm text-gold hover:text-bronze hover:underline font-medium"
                     disabled={isPending}
                   >
-                    Change Mobile Number
+                    Change Email Address
                   </button>
                 </div>
               </>
