@@ -1,13 +1,12 @@
 "use client";
 
 /**
- * Phase 3.1 — Guest Checkout Form Component
+ * Checkout Form Component
  * 
- * Collects customer information for checkout without requiring login:
- * - Full name (mandatory)
- * - Mobile number (mandatory)
- * - Email (optional)
- * - Address fields
+ * Unified checkout form that supports:
+ * - Customer checkout (with customer_id from OTP verification)
+ * - Guest checkout (with guest_session_id)
+ * - Pre-fills customer info when available
  * 
  * Creates order BEFORE payment gateway is triggered.
  */
@@ -15,17 +14,63 @@
 import { useState, useEffect, useRef } from "react";
 import { useRouter } from "next/navigation";
 import { useCartStore, CartItem } from "@/lib/store/cart";
+import type { CheckoutSession } from "@/types/checkout-auth";
 
 // Declare Razorpay types
 declare global {
   interface Window {
-    Razorpay: any;
+    Razorpay: RazorpayConstructor;
   }
+}
+
+interface RazorpayConstructor {
+  new (options: RazorpayOptions): RazorpayInstance;
+}
+
+interface RazorpayInstance {
+  open: () => void;
+}
+
+interface RazorpayOptions {
+  key: string;
+  amount: number;
+  currency: string;
+  name: string;
+  description: string;
+  order_id: string;
+  prefill?: {
+    name?: string;
+    contact?: string;
+    email?: string;
+  };
+  theme?: {
+    color?: string;
+  };
+  handler: (response: RazorpayResponse) => void;
+  modal?: {
+    ondismiss?: () => void;
+  };
+}
+
+interface RazorpayResponse {
+  razorpay_payment_id: string;
+  razorpay_order_id: string;
+  razorpay_signature: string;
+}
+
+// Stock validation error type (matches backend response)
+interface StockValidationError {
+  sku: string;
+  requested_quantity: number;
+  available_quantity: number;
+  reason: "INSUFFICIENT_STOCK" | "VARIANT_NOT_FOUND";
 }
 
 interface GuestCheckoutFormProps {
   onOrderCreated?: (orderId: string, orderNumber: string) => void;
   onError?: (error: string) => void;
+  onStockValidationError?: (errors: StockValidationError[]) => void;
+  checkoutSession?: CheckoutSession | null;
 }
 
 interface FormData {
@@ -40,11 +85,17 @@ interface FormData {
   country: string;
 }
 
-export default function GuestCheckoutForm({ onOrderCreated, onError }: GuestCheckoutFormProps) {
+export default function GuestCheckoutForm({ 
+  onOrderCreated, 
+  onError,
+  onStockValidationError,
+  checkoutSession,
+}: GuestCheckoutFormProps) {
   const router = useRouter();
   const { items: cartItems, clearCart } = useCartStore();
-  const razorpayLoaded = useRef(false);
+  const hasInitialized = useRef({ form: false });
   
+  // Initialize form data, pre-fill from checkout session if available
   const [formData, setFormData] = useState<FormData>({
     name: "",
     phone: "",
@@ -61,34 +112,49 @@ export default function GuestCheckoutForm({ onOrderCreated, onError }: GuestChec
   const [error, setError] = useState<string | null>(null);
   const [fieldErrors, setFieldErrors] = useState<Partial<FormData>>({});
 
-  // Load Razorpay script (Phase 3.2)
-  useEffect(() => {
-    if (razorpayLoaded.current || typeof window === "undefined") return;
-
-    // Check if already loaded
-    if (window.Razorpay) {
-      razorpayLoaded.current = true;
-      return;
+  /**
+   * Normalize phone number to E.164 format (+91XXXXXXXXXX)
+   * Takes 10-digit input and prepends +91
+   * Returns empty string if input is empty/invalid
+   */
+  const normalizePhoneToE164 = (phoneInput: string): string => {
+    if (!phoneInput || !phoneInput.trim()) {
+      return "";
     }
+    // Remove all non-digits
+    const digits = phoneInput.replace(/\D/g, "");
+    // Must be exactly 10 digits
+    if (digits.length !== 10) {
+      return "";
+    }
+    return `+91${digits}`;
+  };
 
-    const script = document.createElement("script");
-    script.src = "https://checkout.razorpay.com/v1/checkout.js";
-    script.async = true;
-    script.onload = () => {
-      razorpayLoaded.current = true;
-    };
-    document.body.appendChild(script);
+  /**
+   * Strip +91 prefix from phone for display in input field
+   */
+  const stripPhonePrefix = (phoneInput: string | null | undefined): string => {
+    if (!phoneInput) return "";
+    return phoneInput.replace(/^\+91/, "");
+  };
 
-    return () => {
-      // Cleanup: remove script if component unmounts
-      const existingScript = document.querySelector(
-        'script[src="https://checkout.razorpay.com/v1/checkout.js"]'
-      );
-      if (existingScript) {
-        existingScript.remove();
-      }
-    };
-  }, []);
+  // Pre-fill form data from checkout session (only once)
+  useEffect(() => {
+    if (hasInitialized.current.form) return;
+    if (!checkoutSession) return;
+    
+    hasInitialized.current.form = true;
+    
+    setFormData(prev => ({
+      ...prev,
+      name: checkoutSession.name || "",
+      email: checkoutSession.email || "",
+      phone: stripPhonePrefix(checkoutSession.phone),
+    }));
+  }, [checkoutSession]);
+
+  // NOTE: Razorpay script is loaded globally in app/layout.tsx with beforeInteractive
+  // This eliminates Turbopack HMR issues and ensures the SDK is always available
 
   // Calculate cart total
   const subtotal = cartItems.reduce((sum, item) => sum + item.price * item.quantity, 0);
@@ -137,6 +203,8 @@ export default function GuestCheckoutForm({ onOrderCreated, onError }: GuestChec
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     
+    console.log("[CHECKOUT] handleSubmit started");
+    
     if (!validateForm()) {
       return;
     }
@@ -149,12 +217,43 @@ export default function GuestCheckoutForm({ onOrderCreated, onError }: GuestChec
     setLoading(true);
     setError(null);
     
+    // HARD GUARD: Only set to true after successful order creation AND Razorpay order ID exists
+    let orderCreatedSuccessfully = false;
+    
     try {
-      // Prepare order data
-      const orderData = {
+      // Normalize phone to E.164 format (+91XXXXXXXXXX) before sending to API
+      const normalizedPhone = normalizePhoneToE164(formData.phone);
+      
+      // Prepare order data with customer/guest identification
+      const orderData: {
+        customer: {
+          name: string;
+          phone: string;
+          email: string;
+        };
+        address: {
+          line1: string;
+          line2: string;
+          city: string;
+          state: string;
+          pincode: string;
+          country: string;
+        };
+        items: Array<{
+          sku: string;
+          product_uid: string;
+          name: string;
+          size: string;
+          quantity: number;
+          price: number;
+        }>;
+        customer_id?: string;
+        guest_session_id?: string;
+        checkout_source?: string;
+      } = {
         customer: {
           name: formData.name.trim(),
-          phone: formData.phone.replace(/\D/g, ""),
+          phone: normalizedPhone,
           email: formData.email.trim() || "",
         },
         address: {
@@ -175,6 +274,23 @@ export default function GuestCheckoutForm({ onOrderCreated, onError }: GuestChec
         })),
       };
       
+      // Add customer/guest identification from checkout session
+      if (checkoutSession?.customer_id) {
+        orderData.customer_id = checkoutSession.customer_id;
+        orderData.checkout_source = "otp_verified";
+      } else if (checkoutSession?.guest_session_id) {
+        orderData.guest_session_id = checkoutSession.guest_session_id;
+        orderData.checkout_source = "guest";
+      } else {
+        orderData.checkout_source = "direct";
+      }
+      
+      // ARCHITECTURAL RESET: Single deterministic API call
+      // - Stock validation happens in backend (single call)
+      // - Razorpay order created BEFORE DB order in backend
+      // - If 409 → stock error, if 500 → payment error, if success → open Razorpay
+      console.log("[FLOW] Creating order (single deterministic flow)");
+      
       // Create order via API
       const response = await fetch("/api/checkout/create-order", {
         method: "POST",
@@ -184,28 +300,73 @@ export default function GuestCheckoutForm({ onOrderCreated, onError }: GuestChec
         body: JSON.stringify(orderData),
       });
       
+      console.log("[CHECKOUT] API response status:", response.status, response.ok);
+      
+      // FAIL-SAFE: Handle HTTP 409 (stock validation failure) explicitly
+      if (response.status === 409) {
+        const data = await response.json();
+        console.log("[FLOW] Stock validation failed (409):", data.invalid_items);
+        
+        // Call stock validation callback if provided (triggers modal in CartDrawer)
+        if (onStockValidationError && data.invalid_items) {
+          onStockValidationError(data.invalid_items);
+        } else {
+          setError("Some items are out of stock. Please update your cart and try again.");
+        }
+        
+        if (onError) {
+          onError("Stock validation failed");
+        }
+        return; // MUST explicitly stop execution - Razorpay must NOT open
+      }
+      
       const result = await response.json();
       
+      // STRICT EARLY RETURN: If response is not OK or result is not successful
       if (!response.ok || !result.success) {
-        throw new Error(result.error || "Failed to create order");
+        console.log("[CHECKOUT] Order creation failed:", result.error);
+        setError(result.error || "Failed to create order");
+        if (onError) {
+          onError(result.error || "Failed to create order");
+        }
+        return; // MUST explicitly stop execution - Razorpay must NOT open
       }
       
-      // Phase 3.2: Order created successfully - now open Razorpay checkout
+      // Phase 3.2: Order created successfully - verify Razorpay order ID exists
       if (!result.razorpay_order_id) {
-        throw new Error("Razorpay order creation failed. Please try again.");
+        console.error("[FLOW] Razorpay order ID missing - order created but Razorpay failed");
+        setError("Razorpay order creation failed. Please try again.");
+        if (onError) {
+          onError("Razorpay order creation failed");
+        }
+        return; // MUST explicitly stop execution - Razorpay must NOT open
+      }
+      
+      // Set guard flag ONLY after all validations pass
+      orderCreatedSuccessfully = true;
+      console.log("[FLOW] Order created:", result.order_number);
+      console.log("[FLOW] Razorpay order ID:", result.razorpay_order_id);
+
+      // HARD GUARD: Razorpay initialization ONLY if order was created successfully
+      if (!orderCreatedSuccessfully) {
+        console.error("[CHECKOUT] CRITICAL: Attempted to open Razorpay without successful order creation");
+        setError("Order validation failed. Please try again.");
+        return;
       }
 
-      // Wait for Razorpay script to load
-      let attempts = 0;
-      while (!window.Razorpay && attempts < 50) {
-        await new Promise((resolve) => setTimeout(resolve, 100));
-        attempts++;
+      // Simple guard - Razorpay is loaded globally in app/layout.tsx with beforeInteractive
+      // No polling needed as the script is guaranteed to be available before hydration
+      if (typeof window === "undefined" || !window.Razorpay) {
+        console.error("[FLOW] Razorpay SDK not available");
+        setError("Payment gateway failed to load. Please refresh the page.");
+        if (onError) {
+          onError("Payment gateway failed to load");
+        }
+        return;
       }
 
-      if (!window.Razorpay) {
-        throw new Error("Payment gateway failed to load. Please refresh and try again.");
-      }
-
+      console.log("[FLOW] Checkout success → opening Razorpay");
+      
       // Initialize Razorpay checkout
       const razorpayOptions = {
         key: result.razorpay_key_id || process.env.NEXT_PUBLIC_RAZORPAY_KEY_ID || "",
@@ -216,21 +377,22 @@ export default function GuestCheckoutForm({ onOrderCreated, onError }: GuestChec
         order_id: result.razorpay_order_id,
         prefill: {
           name: formData.name.trim(),
-          contact: formData.phone.replace(/\D/g, ""),
+          contact: normalizedPhone,
           email: formData.email.trim() || undefined,
         },
         theme: {
           color: "#D4AF37", // Gold color
         },
-        handler: async (response: any) => {
-          // Phase 3.2: Frontend success callback - show "Payment processing..."
-          // DO NOT finalize order state here - webhook will handle that
-          console.log("Razorpay payment response:", response);
+        handler: async (response: RazorpayResponse) => {
+          // STRUCTURAL FIX: This handler ONLY fires after Razorpay confirms payment success
+          // Redirect happens here, ensuring user sees confirmation page after payment completes
+          console.log("[FLOW] Razorpay payment success - payment confirmed");
+          console.log("[FLOW] Payment ID:", response.razorpay_payment_id);
           
           // Show processing message
           setError(null);
           
-          // Store order info
+          // Store order info for potential retry/recovery
           if (typeof window !== "undefined") {
             localStorage.setItem("zeynora_pending_order", JSON.stringify({
               order_id: result.order_id,
@@ -243,8 +405,11 @@ export default function GuestCheckoutForm({ onOrderCreated, onError }: GuestChec
             }));
           }
 
-          // Call onOrderCreated callback
+          // STRUCTURAL FIX: Redirect ONLY after payment success confirmed
+          // Webhook will update payment_status to "paid" asynchronously
+          // Confirmation page will show correct status once webhook completes
           if (onOrderCreated) {
+            console.log("[FLOW] Triggering redirect to confirmation page");
             onOrderCreated(result.order_id, result.order_number);
           }
         },
@@ -252,7 +417,7 @@ export default function GuestCheckoutForm({ onOrderCreated, onError }: GuestChec
           ondismiss: () => {
             // User closed Razorpay popup - order remains in DB with payment_status=PENDING
             // Phase 3.2: Order must remain in DB always
-            console.log("Razorpay popup closed by user");
+            console.log("[CHECKOUT] Razorpay popup closed by user");
             setError("Payment was cancelled. Your order has been saved. You can complete payment later.");
           },
         },
@@ -265,6 +430,7 @@ export default function GuestCheckoutForm({ onOrderCreated, onError }: GuestChec
       
     } catch (err: unknown) {
       const errorMessage = err instanceof Error ? err.message : "An error occurred";
+      console.error("[CHECKOUT] Error in handleSubmit:", errorMessage);
       setError(errorMessage);
       if (onError) {
         onError(errorMessage);

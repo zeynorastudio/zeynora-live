@@ -1,55 +1,60 @@
 "use client";
 
 /**
- * LoginModal Component
+ * CheckoutAuthModal Component
  * 
- * Unified OTP-based authentication modal using email.
+ * Inline authentication modal for checkout flow.
  * Supports:
- * - Sign in (returning customers)
- * - Sign up (new customers)
- * - Checkout flow integration
+ * - OTP verification for returning customers
+ * - Quick signup for new customers
+ * - Guest checkout without authentication
  * 
- * State machine: email_input → otp_sent → otp_verified → customer_resolved
+ * State transitions:
+ *   idle → otp_sent → otp_verified → customer_resolved
+ *   OR
+ *   idle → guest (via "Continue as Guest" button)
  */
 
 import { useState, useCallback } from "react";
-import { X, ArrowLeft, Check } from "lucide-react";
-import { useRouter } from "next/navigation";
-import type { CheckoutCustomer } from "@/types/checkout-auth";
+import { X, ArrowLeft, Check, ShoppingBag, User } from "lucide-react";
+import type { CheckoutCustomer, GuestSession } from "@/types/checkout-auth";
 
-type AuthStep = "email" | "otp" | "signup" | "welcome";
+type AuthStep = "choose" | "email" | "otp" | "signup" | "welcome" | "guest_form";
 
-interface LoginModalProps {
+interface CheckoutAuthModalProps {
   open: boolean;
   onClose: () => void;
-  redirectAfterLogin?: string;
-  // Checkout integration - if provided, modal works in checkout mode
-  onCustomerResolved?: (customer: CheckoutCustomer | null) => void;
+  onCustomerResolved: (customer: CheckoutCustomer | null, guestSession: GuestSession | null) => void;
   initialEmail?: string;
-  checkoutMode?: boolean;
 }
 
-export default function LoginModal({
+// Generate a unique guest session ID
+function generateGuestSessionId(): string {
+  const timestamp = Date.now().toString(36);
+  const randomPart = Math.random().toString(36).substring(2, 10);
+  return `guest_${timestamp}_${randomPart}`;
+}
+
+export default function CheckoutAuthModal({
   open,
   onClose,
-  redirectAfterLogin,
   onCustomerResolved,
   initialEmail = "",
-  checkoutMode = false,
-}: LoginModalProps) {
-  const router = useRouter();
-  
+}: CheckoutAuthModalProps) {
   // Form state
-  const [step, setStep] = useState<AuthStep>("email");
+  const [step, setStep] = useState<AuthStep>("choose");
   const [email, setEmail] = useState(initialEmail);
   const [otp, setOtp] = useState("");
   const [firstName, setFirstName] = useState("");
   const [lastName, setLastName] = useState("");
   const [phone, setPhone] = useState("");
   
+  // Guest form state
+  const [guestEmail, setGuestEmail] = useState("");
+  const [guestPhone, setGuestPhone] = useState("");
+  
   // Customer state
   const [customer, setCustomer] = useState<CheckoutCustomer | null>(null);
-  const [customerId, setCustomerId] = useState<string | null>(null);
   
   // Loading/Error state
   const [loading, setLoading] = useState(false);
@@ -59,6 +64,24 @@ export default function LoginModal({
 
   const normalizeEmail = (emailInput: string): string => {
     return emailInput.trim().toLowerCase();
+  };
+
+  /**
+   * Normalize phone number to E.164 format (+91XXXXXXXXXX)
+   * Takes 10-digit input and prepends +91
+   * Returns null if input is empty/invalid
+   */
+  const normalizePhoneToE164 = (phoneInput: string): string | null => {
+    if (!phoneInput || !phoneInput.trim()) {
+      return null;
+    }
+    // Remove all non-digits
+    const digits = phoneInput.replace(/\D/g, "");
+    // Must be exactly 10 digits
+    if (digits.length !== 10) {
+      return null;
+    }
+    return `+91${digits}`;
   };
 
   const maskEmail = (emailInput: string): string => {
@@ -79,7 +102,6 @@ export default function LoginModal({
 
     const normalizedEmail = normalizeEmail(email);
     
-    // Basic email validation
     const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
     if (!emailRegex.test(normalizedEmail)) {
       setError("Please enter a valid email address");
@@ -140,17 +162,15 @@ export default function LoginModal({
         return;
       }
 
-      // OTP verified - check customer status
       if (data.customer_exists && data.customer) {
         // Returning customer
         setCustomer(data.customer);
-        setCustomerId(data.customer_id);
         setStep("welcome");
         
-        // Complete login for returning customer
+        // Complete login
         await completeLogin(data.customer_id, data.customer);
       } else {
-        // New customer - need to collect profile info
+        // New customer
         setStep("signup");
       }
     } catch (err: unknown) {
@@ -175,6 +195,9 @@ export default function LoginModal({
     }
 
     try {
+      // Normalize phone to E.164 format (+91XXXXXXXXXX) before sending to API
+      const normalizedPhone = normalizePhoneToE164(phone);
+      
       const response = await fetch("/api/auth/customer/complete-login", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -182,7 +205,7 @@ export default function LoginModal({
           email: normalizeEmail(email),
           first_name: firstName.trim(),
           last_name: lastName.trim(),
-          phone: phone.trim() || null,
+          phone: normalizedPhone,
         }),
       });
 
@@ -194,12 +217,14 @@ export default function LoginModal({
         return;
       }
 
-      // Customer created
       setCustomer(data.customer);
       setStep("welcome");
       
-      // Handle completion
-      await handleCompletion(data.customer);
+      // Short delay then complete
+      setTimeout(() => {
+        onCustomerResolved(data.customer, null);
+        onClose();
+      }, 1500);
     } catch (err: unknown) {
       setError("Unable to create account. Please try again.");
     } finally {
@@ -212,7 +237,7 @@ export default function LoginModal({
    */
   const completeLogin = async (customerIdParam: string, customerData: CheckoutCustomer) => {
     try {
-      const response = await fetch("/api/auth/customer/complete-login", {
+      await fetch("/api/auth/customer/complete-login", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -220,59 +245,59 @@ export default function LoginModal({
           customer_id: customerIdParam,
         }),
       });
-
-      // Session created (or skipped) - proceed with completion
-      await handleCompletion(customerData);
     } catch (err) {
-      // Still proceed with completion even if session creation fails
-      await handleCompletion(customerData);
+      // Continue even if session creation fails
     }
+
+    // Short delay then complete
+    setTimeout(() => {
+      onCustomerResolved(customerData, null);
+      onClose();
+    }, 1500);
   };
 
   /**
-   * Handle completion after successful auth
+   * Continue as guest
    */
-  const handleCompletion = useCallback(async (customerData: CheckoutCustomer) => {
-    // Small delay for UX
-    await new Promise(resolve => setTimeout(resolve, 1500));
+  const handleGuestCheckout = () => {
+    setStep("guest_form");
+    setError(null);
+  };
+
+  /**
+   * Submit guest checkout
+   */
+  const handleGuestSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
     
-    if (checkoutMode && onCustomerResolved) {
-      // Checkout mode - return customer to parent
-      onCustomerResolved(customerData);
-      onClose();
-    } else {
-      // Standard mode - redirect
-      onClose();
-      resetForm();
-      if (redirectAfterLogin) {
-        router.push(redirectAfterLogin);
-      } else {
-        router.refresh();
-      }
-    }
-  }, [checkoutMode, onCustomerResolved, onClose, redirectAfterLogin, router]);
+    // Normalize phone to E.164 format (+91XXXXXXXXXX) before storing in session
+    const normalizedGuestPhone = normalizePhoneToE164(guestPhone);
+    
+    // Create guest session
+    const guestSession: GuestSession = {
+      guest_session_id: generateGuestSessionId(),
+      email: guestEmail.trim().toLowerCase() || null,
+      phone: normalizedGuestPhone,
+      created_at: new Date().toISOString(),
+    };
+    
+    onCustomerResolved(null, guestSession);
+    onClose();
+  };
 
   /**
    * Reset form state
    */
   const resetForm = () => {
-    setStep("email");
+    setStep("choose");
     setOtp("");
     setFirstName("");
     setLastName("");
     setPhone("");
+    setGuestEmail("");
+    setGuestPhone("");
     setError(null);
     setCustomer(null);
-    setCustomerId(null);
-  };
-
-  /**
-   * Go back to email input
-   */
-  const handleChangeEmail = () => {
-    setStep("email");
-    setOtp("");
-    setError(null);
   };
 
   return (
@@ -294,15 +319,70 @@ export default function LoginModal({
           <X className="w-5 h-5" />
         </button>
 
+        {/* CHOOSE STEP - Initial choice between sign in and guest */}
+        {step === "choose" && (
+          <>
+            <div className="mb-6 text-center">
+              <h2 className="serif-display text-2xl text-night mb-2">
+                Checkout
+              </h2>
+              <p className="text-sm text-gray-600">
+                Choose how you'd like to continue
+              </p>
+            </div>
+
+            <div className="space-y-4">
+              {/* Sign In Option */}
+              <button
+                onClick={() => setStep("email")}
+                className="w-full flex items-center gap-4 p-4 border-2 border-gold rounded-lg hover:bg-gold/5 transition-colors"
+              >
+                <div className="w-12 h-12 bg-gold/10 rounded-full flex items-center justify-center">
+                  <User className="w-6 h-6 text-gold" />
+                </div>
+                <div className="text-left flex-1">
+                  <p className="font-semibold text-night">Sign In / Sign Up</p>
+                  <p className="text-sm text-gray-500">
+                    Access saved addresses & order history
+                  </p>
+                </div>
+              </button>
+
+              {/* Guest Checkout Option */}
+              <button
+                onClick={handleGuestCheckout}
+                className="w-full flex items-center gap-4 p-4 border border-silver-light rounded-lg hover:bg-offwhite transition-colors"
+              >
+                <div className="w-12 h-12 bg-silver-light/50 rounded-full flex items-center justify-center">
+                  <ShoppingBag className="w-6 h-6 text-silver-dark" />
+                </div>
+                <div className="text-left flex-1">
+                  <p className="font-semibold text-night">Continue as Guest</p>
+                  <p className="text-sm text-gray-500">
+                    Quick checkout without account
+                  </p>
+                </div>
+              </button>
+            </div>
+          </>
+        )}
+
         {/* EMAIL STEP */}
         {step === "email" && (
           <>
             <div className="mb-6">
+              <button
+                onClick={() => setStep("choose")}
+                className="inline-flex items-center gap-1 text-silver-dark hover:text-night transition-colors text-sm mb-3"
+              >
+                <ArrowLeft className="w-4 h-4" />
+                Back
+              </button>
               <h2 className="serif-display text-2xl text-night mb-2">
-                {checkoutMode ? "Sign in to Checkout" : "Sign In"}
+                Enter Your Email
               </h2>
               <p className="text-sm text-gray-600">
-                Enter your email address to continue
+                We'll send you a verification code
               </p>
             </div>
 
@@ -343,10 +423,6 @@ export default function LoginModal({
               >
                 {loading ? "Sending OTP..." : "Send OTP"}
               </button>
-
-              <p className="text-center text-xs text-gray-500">
-                We'll send a 6-digit code to your email
-              </p>
             </div>
           </>
         )}
@@ -356,7 +432,7 @@ export default function LoginModal({
           <>
             <div className="mb-6">
               <button
-                onClick={handleChangeEmail}
+                onClick={() => { setStep("email"); setOtp(""); setError(null); }}
                 className="inline-flex items-center gap-1 text-silver-dark hover:text-night transition-colors text-sm mb-3"
               >
                 <ArrowLeft className="w-4 h-4" />
@@ -366,20 +442,13 @@ export default function LoginModal({
                 Enter OTP
               </h2>
               <p className="text-sm text-gray-600">
-                We sent a code to <span className="font-medium">{maskEmail(email)}</span>
+                Code sent to <span className="font-medium">{maskEmail(email)}</span>
               </p>
             </div>
 
             <form onSubmit={handleVerifyOtp} className="space-y-4">
               <div>
-                <label
-                  htmlFor="otp"
-                  className="block text-sm font-medium text-night mb-2"
-                >
-                  6-Digit Code <span className="text-red-500">*</span>
-                </label>
                 <input
-                  id="otp"
                   type="text"
                   value={otp}
                   onChange={(e) => {
@@ -387,7 +456,7 @@ export default function LoginModal({
                     setOtp(value);
                   }}
                   required
-                  className="w-full px-4 py-3 border border-silver-light rounded-lg focus:outline-none focus:ring-2 focus:ring-gold/50 focus:border-gold transition-all text-center text-2xl tracking-widest"
+                  className="w-full px-4 py-4 border border-silver-light rounded-lg focus:outline-none focus:ring-2 focus:ring-gold/50 focus:border-gold transition-all text-center text-3xl tracking-[0.5em]"
                   placeholder="000000"
                   maxLength={6}
                   disabled={loading}
@@ -406,24 +475,22 @@ export default function LoginModal({
                 disabled={loading || otp.length !== 6}
                 className="w-full bg-gold hover:bg-gold-dark text-white font-semibold py-3 px-4 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
               >
-                {loading ? "Verifying..." : "Verify OTP"}
+                {loading ? "Verifying..." : "Verify"}
               </button>
 
-              <div className="text-center">
-                <button
-                  type="button"
-                  onClick={handleSendOtp}
-                  className="text-sm text-gold hover:text-gold-dark font-medium"
-                  disabled={loading}
-                >
-                  Resend OTP
-                </button>
-              </div>
+              <button
+                type="button"
+                onClick={handleSendOtp}
+                className="w-full text-sm text-gold hover:text-gold-dark font-medium"
+                disabled={loading}
+              >
+                Resend OTP
+              </button>
             </form>
           </>
         )}
 
-        {/* SIGNUP STEP (New Customer) */}
+        {/* SIGNUP STEP */}
         {step === "signup" && (
           <>
             <div className="mb-6">
@@ -431,7 +498,7 @@ export default function LoginModal({
                 Complete Your Profile
               </h2>
               <p className="text-sm text-gray-600">
-                Just a few more details to create your account
+                Quick setup to create your account
               </p>
             </div>
 
@@ -514,13 +581,13 @@ export default function LoginModal({
                 disabled={loading || !firstName.trim() || !lastName.trim()}
                 className="w-full bg-gold hover:bg-gold-dark text-white font-semibold py-3 px-4 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
               >
-                {loading ? "Creating Account..." : "Create Account"}
+                {loading ? "Creating Account..." : "Create Account & Continue"}
               </button>
             </form>
           </>
         )}
 
-        {/* WELCOME STEP (Success) */}
+        {/* WELCOME STEP */}
         {step === "welcome" && customer && (
           <div className="text-center py-8">
             <div className="w-16 h-16 bg-green-100 rounded-full flex items-center justify-center mx-auto mb-4">
@@ -530,36 +597,89 @@ export default function LoginModal({
               Welcome back, {customer.first_name}!
             </h2>
             <p className="text-sm text-gray-600">
-              {checkoutMode 
-                ? "Redirecting to checkout..." 
-                : "Redirecting to your account..."}
+              Continuing to checkout...
             </p>
           </div>
+        )}
+
+        {/* GUEST FORM STEP */}
+        {step === "guest_form" && (
+          <>
+            <div className="mb-6">
+              <button
+                onClick={() => setStep("choose")}
+                className="inline-flex items-center gap-1 text-silver-dark hover:text-night transition-colors text-sm mb-3"
+              >
+                <ArrowLeft className="w-4 h-4" />
+                Back
+              </button>
+              <h2 className="serif-display text-2xl text-night mb-2">
+                Guest Checkout
+              </h2>
+              <p className="text-sm text-gray-600">
+                Enter your contact details for order updates
+              </p>
+            </div>
+
+            <form onSubmit={handleGuestSubmit} className="space-y-4">
+              <div>
+                <label
+                  htmlFor="guest_email"
+                  className="block text-sm font-medium text-night mb-2"
+                >
+                  Email <span className="text-gray-500 text-xs">(for order confirmation)</span>
+                </label>
+                <input
+                  id="guest_email"
+                  type="email"
+                  value={guestEmail}
+                  onChange={(e) => setGuestEmail(e.target.value)}
+                  className="w-full px-4 py-3 border border-silver-light rounded-lg focus:outline-none focus:ring-2 focus:ring-gold/50 focus:border-gold transition-all"
+                  placeholder="your@email.com"
+                  autoComplete="email"
+                />
+              </div>
+
+              <div>
+                <label
+                  htmlFor="guest_phone"
+                  className="block text-sm font-medium text-night mb-2"
+                >
+                  Phone <span className="text-gray-500 text-xs">(for delivery updates)</span>
+                </label>
+                <div className="flex">
+                  <span className="inline-flex items-center px-3 rounded-l-lg border border-r-0 border-silver-light bg-offwhite text-silver-dark text-sm">
+                    +91
+                  </span>
+                  <input
+                    id="guest_phone"
+                    type="tel"
+                    value={guestPhone}
+                    onChange={(e) => {
+                      const value = e.target.value.replace(/\D/g, "").slice(0, 10);
+                      setGuestPhone(value);
+                    }}
+                    className="flex-1 px-4 py-3 border border-silver-light rounded-r-lg focus:outline-none focus:ring-2 focus:ring-gold/50 focus:border-gold transition-all"
+                    placeholder="9876543210"
+                    maxLength={10}
+                  />
+                </div>
+              </div>
+
+              <button
+                type="submit"
+                className="w-full bg-gold hover:bg-gold-dark text-white font-semibold py-3 px-4 rounded-lg transition-colors"
+              >
+                Continue as Guest
+              </button>
+
+              <p className="text-center text-xs text-gray-500">
+                You can create an account later to track your orders
+              </p>
+            </form>
+          </>
         )}
       </div>
     </div>
   );
 }
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-

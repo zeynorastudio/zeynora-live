@@ -57,17 +57,56 @@ function getOrdersSender(): string {
   return `${RESEND_ORDERS_FROM_NAME} <${RESEND_ORDERS_FROM_EMAIL}>`;
 }
 
-/**
- * Escape HTML to prevent XSS
- */
-function escapeHtml(str: string): string {
-  return str
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;")
-    .replace(/'/g, "&#039;");
-}
+type OrderEmailPayload = {
+  order_id: string;
+  order_date: string;
+  payment_method: string;
+  subtotal: number;
+  shipping: number;
+  tax: number;
+  total: number;
+  items_html: string;
+  shipping_address: string;
+  delivery_date: string;
+  recipient_email: string;
+};
+
+type OrderSnapshotMetadata = {
+  customer_snapshot?: {
+    email?: string | null;
+    name?: string;
+    address?: {
+      line1?: string;
+      line2?: string;
+      city?: string;
+      state?: string;
+      pincode?: string;
+      country?: string;
+    };
+  };
+  items_snapshot?: Array<{
+    product_name?: string;
+    size?: string;
+    quantity?: number;
+    selling_price?: number;
+    subtotal?: number;
+  }>;
+};
+
+type TypedOrder = {
+  id: string;
+  order_number: string;
+  user_id: string | null;
+  customer_id: string | null;
+  guest_email: string | null;
+  subtotal: number | null;
+  shipping_fee: number | null;
+  total_amount: number | null;
+  payment_status: string | null;
+  metadata: OrderSnapshotMetadata | null;
+  created_at: string;
+  payment_method: string | null;
+};
 
 /**
  * Build OTP email template
@@ -147,62 +186,71 @@ If you didn't request this code, please ignore this email.
   return { subject, html, text };
 }
 
+function buildOrderEmailPayload(order: TypedOrder): OrderEmailPayload | null {
+  const metadata = order.metadata || {};
+
+  const customer = metadata.customer_snapshot || {};
+  const items = metadata.items_snapshot || [];
+
+  if (!customer.email) {
+    console.error("[EMAIL_FAIL] Missing customer email");
+    return null;
+  }
+
+  if (!items.length) {
+    console.error("[EMAIL_FAIL] No items in snapshot");
+    return null;
+  }
+
+  const itemsHtml = items.map(item => `
+      <tr>
+        <td>${item.product_name}</td>
+        <td>${item.size}</td>
+        <td>${item.quantity}</td>
+        <td>₹${item.selling_price}</td>
+        <td>₹${item.subtotal}</td>
+      </tr>
+   `).join("");
+
+  const shippingAddress = `
+      ${customer.name}<br/>
+      ${customer.address?.line1 || ""}<br/>
+      ${customer.address?.city || ""}, ${customer.address?.state || ""}<br/>
+      ${customer.address?.pincode || ""}
+   `;
+
+  return {
+    order_id: order.order_number,
+    order_date: new Date(order.created_at).toLocaleDateString("en-IN"),
+    payment_method: order.payment_method || "Online",
+    subtotal: order.subtotal || 0,
+    shipping: order.shipping_fee || 0,
+    tax: 0,
+    total: order.total_amount || 0,
+    items_html: itemsHtml,
+    shipping_address: shippingAddress,
+    delivery_date: "Within 5–7 business days",
+    recipient_email: customer.email
+  };
+}
+
 /**
  * Build order confirmation email template
  */
-function buildOrderConfirmationEmailTemplate(order: {
-  orderNumber: string;
-  customerName: string;
-  items: Array<{
-    name: string;
-    sku: string;
-    quantity: number;
-    price: number;
-  }>;
-  subtotal: number;
-  shippingCost: number;
-  total: number;
-  shippingAddress?: {
-    line1: string;
-    line2?: string;
-    city: string;
-    state: string;
-    pincode: string;
-    country: string;
-  };
-  paymentStatus: string;
-}): { subject: string; html: string; text: string } {
-  const { orderNumber, customerName, items, subtotal, shippingCost, total, shippingAddress, paymentStatus } = order;
-  
-  const subject = `Order Confirmed - ${orderNumber} | ZEYNORA`;
-  
-  const itemsHtml = items.map(item => `
-    <tr>
-      <td style="padding: 12px; border-bottom: 1px solid #eee;">
-        <strong>${escapeHtml(item.name)}</strong><br>
-        <span style="color: #666; font-size: 12px;">SKU: ${escapeHtml(item.sku)}</span>
-      </td>
-      <td style="padding: 12px; border-bottom: 1px solid #eee; text-align: center;">${item.quantity}</td>
-      <td style="padding: 12px; border-bottom: 1px solid #eee; text-align: right;">₹${item.price.toLocaleString("en-IN")}</td>
-      <td style="padding: 12px; border-bottom: 1px solid #eee; text-align: right;">₹${(item.price * item.quantity).toLocaleString("en-IN")}</td>
-    </tr>
-  `).join("");
-
-  const addressHtml = shippingAddress ? `
-    <div style="background-color: #f9f9f9; padding: 15px; border-radius: 4px; margin-top: 20px;">
-      <h3 style="margin: 0 0 10px 0; color: #1a1a1a;">Shipping Address</h3>
-      <p style="margin: 0; color: #666;">
-        ${escapeHtml(shippingAddress.line1)}<br>
-        ${shippingAddress.line2 ? escapeHtml(shippingAddress.line2) + "<br>" : ""}
-        ${escapeHtml(shippingAddress.city)}, ${escapeHtml(shippingAddress.state)} ${escapeHtml(shippingAddress.pincode)}<br>
-        ${escapeHtml(shippingAddress.country)}
-      </p>
-    </div>
-  ` : "";
-
-  const paymentStatusHtml = paymentStatus === "paid" 
-    ? '<div style="background-color: #d4edda; color: #155724; padding: 10px; border-radius: 4px; margin: 20px 0;"><strong>Payment Status:</strong> Paid</div>'
-    : '<div style="background-color: #fff3cd; color: #856404; padding: 10px; border-radius: 4px; margin: 20px 0;"><strong>Payment Status:</strong> ' + escapeHtml(paymentStatus) + '</div>';
+function buildOrderConfirmationEmailTemplate(
+  payload: OrderEmailPayload
+): { subject: string; html: string; text: string } {
+  const subject = `Order Confirmed - ${payload.order_id} | ZEYNORA`;
+  const addressHtml = payload.shipping_address.trim()
+    ? `
+      <div style="background-color: #f9f9f9; padding: 15px; border-radius: 4px; margin-top: 20px;">
+        <h3 style="margin: 0 0 10px 0; color: #1a1a1a;">Shipping Address</h3>
+        <p style="margin: 0; color: #666;">
+          ${payload.shipping_address}
+        </p>
+      </div>
+    `
+    : "";
 
   const html = `
     <!DOCTYPE html>
@@ -221,17 +269,17 @@ function buildOrderConfirmationEmailTemplate(order: {
         <!-- Content -->
         <div style="padding: 30px; background-color: #ffffff;">
           <h2 style="color: #1a1a1a; margin-top: 0;">Thank you for your order!</h2>
-          <p style="color: #666;">Hi ${escapeHtml(customerName)},</p>
+          <p style="color: #666;">Hi,</p>
           <p style="color: #666;">
             We've received your order and are getting it ready. You'll receive another email 
             when your order ships.
           </p>
 
           <div style="background-color: #f9f9f9; padding: 15px; border-radius: 4px; margin: 20px 0;">
-            <strong>Order Number:</strong> ${escapeHtml(orderNumber)}
+            <strong>Order Number:</strong> ${payload.order_id}<br/>
+            <strong>Order Date:</strong> ${payload.order_date}<br/>
+            <strong>Payment Method:</strong> ${payload.payment_method}
           </div>
-
-          ${paymentStatusHtml}
 
           <!-- Order Items -->
           <h3 style="color: #1a1a1a; border-bottom: 2px solid #D4AF37; padding-bottom: 10px;">Order Details</h3>
@@ -239,13 +287,14 @@ function buildOrderConfirmationEmailTemplate(order: {
             <thead>
               <tr style="background-color: #f5f5f5;">
                 <th style="padding: 12px; text-align: left;">Item</th>
+                <th style="padding: 12px; text-align: left;">Size</th>
                 <th style="padding: 12px; text-align: center;">Qty</th>
                 <th style="padding: 12px; text-align: right;">Price</th>
                 <th style="padding: 12px; text-align: right;">Total</th>
               </tr>
             </thead>
             <tbody>
-              ${itemsHtml}
+              ${payload.items_html}
             </tbody>
           </table>
 
@@ -253,19 +302,27 @@ function buildOrderConfirmationEmailTemplate(order: {
           <table style="width: 100%; margin-bottom: 20px;">
             <tr>
               <td style="padding: 8px 0; color: #666;">Subtotal</td>
-              <td style="padding: 8px 0; text-align: right;">₹${subtotal.toLocaleString("en-IN")}</td>
+              <td style="padding: 8px 0; text-align: right;">₹${payload.subtotal.toLocaleString("en-IN")}</td>
             </tr>
             <tr>
               <td style="padding: 8px 0; color: #666;">Shipping</td>
-              <td style="padding: 8px 0; text-align: right;">${shippingCost > 0 ? "₹" + shippingCost.toLocaleString("en-IN") : "FREE"}</td>
+              <td style="padding: 8px 0; text-align: right;">₹${payload.shipping.toLocaleString("en-IN")}</td>
+            </tr>
+            <tr>
+              <td style="padding: 8px 0; color: #666;">Tax</td>
+              <td style="padding: 8px 0; text-align: right;">₹${payload.tax.toLocaleString("en-IN")}</td>
             </tr>
             <tr style="border-top: 2px solid #D4AF37;">
               <td style="padding: 12px 0; font-weight: bold; font-size: 18px;">Total</td>
-              <td style="padding: 12px 0; text-align: right; font-weight: bold; font-size: 18px;">₹${total.toLocaleString("en-IN")}</td>
+              <td style="padding: 12px 0; text-align: right; font-weight: bold; font-size: 18px;">₹${payload.total.toLocaleString("en-IN")}</td>
             </tr>
           </table>
 
           ${addressHtml}
+
+          <div style="background-color: #f9f9f9; padding: 15px; border-radius: 4px; margin-top: 20px;">
+            <strong>Estimated Delivery:</strong> ${payload.delivery_date}
+          </div>
 
           <!-- CTA -->
           <div style="text-align: center; margin-top: 30px;">
@@ -292,21 +349,18 @@ function buildOrderConfirmationEmailTemplate(order: {
   const text = `
 ZEYNORA - Order Confirmation
 
-Hi ${customerName},
-
 Thank you for your order!
 
-Order Number: ${orderNumber}
-Payment Status: ${paymentStatus}
+Order Number: ${payload.order_id}
+Order Date: ${payload.order_date}
+Payment Method: ${payload.payment_method}
 
-Order Details:
-${items.map(item => `- ${item.name} (SKU: ${item.sku}) x${item.quantity} = ₹${(item.price * item.quantity).toLocaleString("en-IN")}`).join("\n")}
+Subtotal: ₹${payload.subtotal.toLocaleString("en-IN")}
+Shipping: ₹${payload.shipping.toLocaleString("en-IN")}
+Tax: ₹${payload.tax.toLocaleString("en-IN")}
+Total: ₹${payload.total.toLocaleString("en-IN")}
 
-Subtotal: ₹${subtotal.toLocaleString("en-IN")}
-Shipping: ${shippingCost > 0 ? "₹" + shippingCost.toLocaleString("en-IN") : "FREE"}
-Total: ₹${total.toLocaleString("en-IN")}
-
-${shippingAddress ? `Shipping Address:\n${shippingAddress.line1}${shippingAddress.line2 ? "\n" + shippingAddress.line2 : ""}\n${shippingAddress.city}, ${shippingAddress.state} ${shippingAddress.pincode}\n${shippingAddress.country}` : ""}
+Estimated Delivery: ${payload.delivery_date}
 
 View your order: ${SITE_URL}/account/orders
 
@@ -387,18 +441,23 @@ export async function sendOrderConfirmationEmail(orderId: string): Promise<boole
     const supabase = createServiceRoleClient();
 
     // Fetch order details
+    // STRUCTURAL FIX: Use correct column names (shipping_fee, total_amount)
+    // STRUCTURAL FIX: Include guest_email and shipping fields for guest support
     const { data: orderData, error: orderError } = await supabase
       .from("orders")
       .select(`
         id,
         order_number,
         user_id,
+        customer_id,
+        guest_email,
         subtotal,
-        shipping_cost,
-        total,
+        shipping_fee,
+        total_amount,
         payment_status,
         metadata,
-        shipping_address_id
+        created_at,
+        payment_method
       `)
       .eq("id", orderId)
       .single();
@@ -412,128 +471,47 @@ export async function sendOrderConfirmationEmail(orderId: string): Promise<boole
       return false;
     }
 
-    const typedOrder = orderData as {
-      id: string;
-      order_number: string;
-      user_id: string | null;
-      subtotal: number | null;
-      shipping_cost: number | null;
-      total: number | null;
-      payment_status: string | null;
-      metadata: Record<string, unknown> | null;
-      shipping_address_id: string | null;
-    };
+    const typedOrder = orderData as TypedOrder;
 
-    // Get user email
-    if (!typedOrder.user_id) {
-      console.error("[EMAIL_FAILED]", {
-        type: "ORDER_CONFIRMATION_EMAIL_SENT",
-        order_id: orderId,
-        error: "Order has no user_id",
-      });
+    if (typedOrder.payment_status !== "paid") {
+      console.warn("[EMAIL_SKIP] Payment not completed");
       return false;
     }
 
-    const { data: userData } = await supabase
-      .from("users")
-      .select("email, full_name")
-      .eq("id", typedOrder.user_id)
-      .single();
+    const payload = buildOrderEmailPayload(typedOrder);
 
-    const typedUser = userData as { email: string; full_name: string | null } | null;
-    if (!typedUser?.email) {
-      console.error("[EMAIL_FAILED]", {
-        type: "ORDER_CONFIRMATION_EMAIL_SENT",
-        order_id: orderId,
-        error: "User email not found",
-      });
+    if (!payload) {
+      console.error("[EMAIL_ABORT] Payload build failed");
       return false;
     }
 
-    // Fetch order items
-    const { data: itemsData } = await supabase
-      .from("order_items")
-      .select("name, sku, quantity, price")
-      .eq("order_id", orderId);
+    console.log("[EMAIL_PAYLOAD]", payload);
 
-    const items = ((itemsData || []) as Array<{
-      name: string | null;
-      sku: string | null;
-      quantity: number;
-      price: number;
-    }>).map(item => ({
-      name: item.name || "Product",
-      sku: item.sku || "N/A",
-      quantity: item.quantity,
-      price: item.price,
-    }));
+    const { subject, html, text } = buildOrderConfirmationEmailTemplate(payload);
 
-    // Fetch shipping address
-    let shippingAddress;
-    if (typedOrder.shipping_address_id) {
-      const { data: addressData } = await supabase
-        .from("addresses")
-        .select("line1, line2, city, state, pincode, country")
-        .eq("id", typedOrder.shipping_address_id)
-        .single();
+    try {
+      const client = getResendClient();
+      const fromSender = getOrdersSender();
+      const result = await client.emails.send({
+        from: fromSender,
+        to: [payload.recipient_email],
+        subject,
+        html,
+        text,
+      });
 
-      if (addressData) {
-        const typedAddress = addressData as {
-          line1: string | null;
-          line2: string | null;
-          city: string | null;
-          state: string | null;
-          pincode: string | null;
-          country: string | null;
-        };
-        shippingAddress = {
-          line1: typedAddress.line1 || "",
-          line2: typedAddress.line2 || undefined,
-          city: typedAddress.city || "",
-          state: typedAddress.state || "",
-          pincode: typedAddress.pincode || "",
-          country: typedAddress.country || "India",
-        };
+      if (result.error) {
+        console.error("[EMAIL_ERROR]", result.error);
+        return false;
       }
-    }
-
-    // Build and send email
-    const { subject, html, text } = buildOrderConfirmationEmailTemplate({
-      orderNumber: typedOrder.order_number,
-      customerName: typedUser.full_name || "Customer",
-      items,
-      subtotal: typedOrder.subtotal || 0,
-      shippingCost: typedOrder.shipping_cost || 0,
-      total: typedOrder.total || 0,
-      shippingAddress,
-      paymentStatus: typedOrder.payment_status || "pending",
-    });
-
-    const client = getResendClient();
-    const fromSender = getOrdersSender();
-    const result = await client.emails.send({
-      from: fromSender,
-      to: [typedUser.email],
-      subject,
-      html,
-      text,
-    });
-
-    if (result.error) {
-      console.error("[EMAIL_FAILED]", {
-        type: "ORDER_CONFIRMATION_EMAIL_SENT",
-        order_id: orderId,
-        order_number: typedOrder.order_number,
-        error: result.error.message || "Unknown error",
-      });
+    } catch (error) {
+      console.error("[EMAIL_ERROR]", error);
       return false;
     }
 
-    // Log success
-    console.log("[ORDER_CONFIRMATION_EMAIL_SENT]", {
+    console.log("[EMAIL_SUCCESS]", {
       order_id: orderId,
-      order_number: typedOrder.order_number,
-      email: typedUser.email.substring(0, 3) + "***", // Masked
+      email: payload.recipient_email
     });
 
     // Write audit log
@@ -544,7 +522,8 @@ export async function sendOrderConfirmationEmail(orderId: string): Promise<boole
         target_id: orderId,
         details: {
           order_number: typedOrder.order_number,
-          recipient_email: typedUser.email.substring(0, 3) + "***", // Masked
+          recipient_email: payload.recipient_email,
+          customer_type: typedOrder.user_id ? "logged_in" : "guest",
         },
       } as unknown as never);
     } catch (auditError) {

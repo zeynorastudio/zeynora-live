@@ -362,3 +362,83 @@ export async function getCustomerByAuthUid(
   return data as Customer | null;
 }
 
+/**
+ * Gets customer by ID
+ * For use in checkout when customer_id is provided from OTP verification
+ */
+export async function getCustomerById(
+  customerId: string
+): Promise<Customer | null> {
+  const supabase = createServiceRoleClient();
+
+  const { data, error } = await supabase
+    .from("customers")
+    .select("*")
+    .eq("id", customerId)
+    .maybeSingle();
+
+  if (error) {
+    console.error("Error getting customer by ID:", error);
+    return null;
+  }
+
+  return data as Customer | null;
+}
+
+/**
+ * Creates a customer without Supabase Auth
+ * For quick checkout signup - auth_uid will be null until full login
+ */
+export async function createCustomerWithoutAuth(data: {
+  email: string;
+  first_name: string;
+  last_name: string;
+  phone?: string | null;
+}): Promise<{ customer: Customer | null; error: string | null }> {
+  const supabase = createServiceRoleClient();
+
+  // Validate phone
+  const phoneValidation = validatePhoneUtil(data.phone);
+  if (!phoneValidation.valid) {
+    return { customer: null, error: phoneValidation.error || "Invalid phone number" };
+  }
+
+  // Sanitize email
+  const sanitizedEmail = sanitizeEmail(data.email);
+
+  // Check for admin email collision
+  const isAdmin = await isAdminEmail(sanitizedEmail);
+  if (isAdmin) {
+    return {
+      customer: null,
+      error: "This email is reserved for admin accounts.",
+    };
+  }
+
+  // Check if customer already exists
+  const existingCustomer = await findCustomerByEmail(sanitizedEmail);
+  if (existingCustomer) {
+    // Return existing customer
+    return { customer: existingCustomer, error: null };
+  }
+
+  // Create new customer without auth_uid
+  const { data: customer, error } = await (supabase
+    .from("customers") as unknown as { insert: (data: unknown) => { select: () => { single: () => Promise<{ data: Customer | null; error: unknown }> } } })
+    .insert({
+      auth_uid: null, // No auth link yet
+      email: sanitizedEmail,
+      first_name: data.first_name.trim(),
+      last_name: data.last_name.trim(),
+      phone: data.phone?.trim() || null,
+    })
+    .select()
+    .single();
+
+  if (error) {
+    console.error("Error creating customer without auth:", error);
+    return { customer: null, error: "Failed to create customer account" };
+  }
+
+  return { customer: customer as Customer, error: null };
+}

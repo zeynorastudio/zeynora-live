@@ -2,29 +2,37 @@
 
 import { useState } from "react";
 import Button from "@/components/ui/Button";
-// Load Razorpay SDK dynamically
-async function loadRazorpay(): Promise<any> {
-  return new Promise((resolve, reject) => {
-    if (typeof window === "undefined") {
-      reject(new Error("Razorpay can only be loaded in browser"));
-      return;
-    }
 
-    if ((window as any).Razorpay) {
-      resolve((window as any).Razorpay);
-      return;
-    }
+// Razorpay SDK is loaded globally in app/layout.tsx with beforeInteractive strategy
+// This ensures it's available before any client components hydrate
 
-    const script = document.createElement("script");
-    script.src = "https://checkout.razorpay.com/v1/checkout.js";
-    script.onload = () => {
-      resolve((window as any).Razorpay);
-    };
-    script.onerror = () => {
-      reject(new Error("Failed to load Razorpay SDK"));
-    };
-    document.body.appendChild(script);
-  });
+declare global {
+  interface Window {
+    Razorpay: new (options: RazorpayOptions) => RazorpayInstance;
+  }
+}
+
+interface RazorpayOptions {
+  key: string;
+  amount: number;
+  currency: string;
+  name: string;
+  description: string;
+  order_id: string;
+  handler: (response: RazorpayPaymentResponse) => void;
+  prefill?: Record<string, unknown>;
+  theme?: { color?: string };
+  modal?: { ondismiss?: () => void };
+}
+
+interface RazorpayInstance {
+  open: () => void;
+}
+
+interface RazorpayPaymentResponse {
+  razorpay_payment_id: string;
+  razorpay_order_id: string;
+  razorpay_signature: string;
 }
 
 interface OrderDetailClientProps {
@@ -69,22 +77,20 @@ export default function OrderDetailClient({
         throw new Error("Order mismatch - please refresh the page");
       }
 
-      // Load Razorpay SDK
-      const Razorpay = await loadRazorpay();
-
-      if (!Razorpay) {
-        throw new Error("Failed to load Razorpay SDK");
+      // Check Razorpay SDK (loaded globally in app/layout.tsx)
+      if (typeof window === "undefined" || !window.Razorpay) {
+        throw new Error("Payment gateway failed to load. Please refresh the page.");
       }
 
       // Initialize Razorpay checkout
-      const options = {
+      const options: RazorpayOptions = {
         key: process.env.NEXT_PUBLIC_RAZORPAY_KEY_ID!,
         amount: retryData.amount,
         currency: retryData.currency || "INR",
         name: "ZEYNORA",
         description: `Order ${retryData.order_number}`,
         order_id: retryData.razorpay_order_id,
-        handler: async function (response: any) {
+        handler: async function (response: RazorpayPaymentResponse) {
           // Verify payment
           const verifyResponse = await fetch("/api/payments/razorpay/verify", {
             method: "POST",
@@ -117,10 +123,11 @@ export default function OrderDetailClient({
         },
       };
 
-      const razorpay = new Razorpay(options);
+      const razorpay = new window.Razorpay(options);
       razorpay.open();
-    } catch (err: any) {
-      setError(err.message || "Failed to initiate payment");
+    } catch (err: unknown) {
+      const errorMessage = err instanceof Error ? err.message : "Failed to initiate payment";
+      setError(errorMessage);
       setLoading(false);
     }
   };

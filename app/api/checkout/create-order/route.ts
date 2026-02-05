@@ -1,36 +1,39 @@
 /**
- * Phase 3.1 — Guest Checkout Order Creation API
+ * Phase 3.1 — Checkout Order Creation API (ARCHITECTURAL RESET)
  * 
  * POST /api/checkout/create-order
  * 
- * Creates an order BEFORE payment gateway is triggered.
- * Supports both guest and logged-in users.
+ * DETERMINISTIC PAYMENT FLOW:
+ * 1. Validate stock (read-only) → 409 if insufficient
+ * 2. Create Razorpay order FIRST → 500 if fails
+ * 3. Create DB order WITH razorpay_order_id (single insert)
+ * 
+ * INVARIANT: No DB order exists without razorpay_order_id
  * 
  * Key behaviors:
+ * - Guest and logged-in users follow SAME backend flow
  * - Order is created with status='created', payment_status='pending'
- * - Guest checkout is allowed (no login required)
+ * - Razorpay order is ALWAYS created before DB order
  * - Customer snapshot is stored in metadata (immutable)
- * - Shipping cost is calculated via Shiprocket but NOT charged to customer
  * - Links to customers table if user is logged in
- * - Order is traceable by order_id and phone number
  */
 
 import { NextRequest, NextResponse } from "next/server";
 import { createServerClient, createServiceRoleClient } from "@/lib/supabase/server";
 import { z } from "zod";
-import { createRazorpayOrder } from "@/lib/payments/razorpay";
+import Razorpay from "razorpay";
 import { getDefaultWeight } from "@/lib/shipping/config";
 
-// Zod validation schema
+// Zod validation schema - ALL fields required for order creation
 const checkoutSchema = z.object({
-  // Customer information
+  // Customer information - REQUIRED (no validate_only mode)
   customer: z.object({
     name: z.string().min(1, "Full name is required"),
     phone: z.string().min(10, "Mobile number is required").max(15),
     email: z.string().email().optional().or(z.literal("")),
   }),
   
-  // Shipping address
+  // Shipping address - REQUIRED (no validate_only mode)
   address: z.object({
     line1: z.string().min(1, "Address line 1 is required"),
     line2: z.string().optional().or(z.literal("")),
@@ -40,7 +43,7 @@ const checkoutSchema = z.object({
     country: z.string().default("India"),
   }),
   
-  // Cart items (SKU-level)
+  // Cart items (SKU-level) - REQUIRED
   items: z.array(z.object({
     sku: z.string().min(1),
     product_uid: z.string().min(1),
@@ -49,9 +52,28 @@ const checkoutSchema = z.object({
     quantity: z.number().int().min(1),
     price: z.number().min(0), // Selling price from cart
   })).min(1, "Cart cannot be empty"),
+  
+  // Optional: Customer ID from OTP-verified checkout
+  customer_id: z.string().uuid().optional(),
+  
+  // Optional: Guest session ID for guest checkout
+  guest_session_id: z.string().optional(),
+  
+  // Optional: Checkout source for tracking
+  checkout_source: z.enum(["otp_verified", "guest", "direct", "logged_in"]).optional(),
 });
 
 type CheckoutInput = z.infer<typeof checkoutSchema>;
+
+// Stock validation error types
+type StockValidationReason = "INSUFFICIENT_STOCK" | "VARIANT_NOT_FOUND";
+
+interface StockValidationError {
+  sku: string;
+  requested_quantity: number;
+  available_quantity: number;
+  reason: StockValidationReason;
+}
 
 // Generate unique order number
 function generateOrderNumber(): string {
@@ -89,7 +111,123 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const { customer, address, items } = validation.data;
+    const { customer, address, items, customer_id: providedCustomerId, guest_session_id, checkout_source } = validation.data;
+    
+    console.log("[FLOW] Order creation started - single deterministic flow");
+    
+    // Service role client for DB operations
+    const supabase = createServiceRoleClient();
+
+    // PART 1: Stock validation (read-only, no mutations)
+    // STRICT DETERMINISTIC VALIDATION - Fail-fast BEFORE authentication and order creation
+    
+    // Step 1: Extract SKUs from cart
+    const skus = items.map(i => i.sku);
+    
+    // Step 2: Fetch variants from database (fetch full data for reuse in order creation)
+    const { data: variants, error: variantsError } = await supabase
+      .from("product_variants")
+      .select("id, sku, stock, price, cost, product_uid")
+      .in("sku", skus);
+
+    if (variantsError) {
+      return NextResponse.json(
+        { success: false, error: "Failed to validate stock", details: variantsError.message },
+        { status: 500 }
+      );
+    }
+
+    // Type definition for variant data
+    type VariantData = {
+      id: string;
+      sku: string;
+      price: number | null;
+      cost: number | null;
+      stock: number | null;
+      product_uid: string;
+    };
+
+    const typedVariants = (variants || []) as VariantData[];
+
+    // Step 3A: HARD VALIDATION - Check if all SKUs exist
+    // Get unique SKUs to compare count (handles duplicate SKUs in cart)
+    const uniqueSkus = Array.from(new Set(skus));
+    
+    if (typedVariants.length !== uniqueSkus.length) {
+      // Find missing SKUs
+      const foundSkus = new Set(typedVariants.map(v => v.sku));
+      const missingSkus = uniqueSkus.filter(sku => !foundSkus.has(sku));
+      
+      const errors: StockValidationError[] = missingSkus.map(sku => {
+        // Aggregate quantity for this SKU across all cart items
+        const totalQuantity = items
+          .filter(item => item.sku === sku)
+          .reduce((sum, item) => sum + item.quantity, 0);
+        
+        return {
+          sku,
+          requested_quantity: totalQuantity,
+          available_quantity: 0,
+          reason: "VARIANT_NOT_FOUND",
+        };
+      });
+      
+      return NextResponse.json(
+        {
+          success: false,
+          error: "Stock validation failed",
+          invalid_items: errors,
+        },
+        { status: 409 }
+      );
+    }
+
+    // Step 3B: Build Map<string, number> of sku → stock
+    const stockMap = new Map<string, number>();
+    for (const variant of typedVariants) {
+      // Treat null stock as 0
+      const stock = variant.stock ?? 0;
+      stockMap.set(variant.sku, stock);
+    }
+
+    // Step 3C: Validate each unique SKU (aggregate quantities for duplicates)
+    const errors: StockValidationError[] = [];
+    
+    for (const sku of uniqueSkus) {
+      // Aggregate requested quantity for this SKU (handles duplicate SKUs in cart)
+      const requestedQuantity = items
+        .filter(item => item.sku === sku)
+        .reduce((sum, item) => sum + item.quantity, 0);
+      
+      const stock = stockMap.get(sku) ?? 0; // Should never be undefined, but safe fallback
+      
+      // Fail if requested quantity exceeds available stock
+      if (requestedQuantity > stock) {
+        errors.push({
+          sku,
+          requested_quantity: requestedQuantity,
+          available_quantity: stock,
+          reason: "INSUFFICIENT_STOCK",
+        });
+      }
+    }
+
+    // Step 4: If any errors exist, return 409 immediately
+    // NO order creation, NO Razorpay call when stock is insufficient
+    if (errors.length > 0) {
+      console.log("[FLOW] Stock validation FAILED - blocking checkout");
+      return NextResponse.json(
+        {
+          success: false,
+          error: "Stock validation failed",
+          invalid_items: errors,
+        },
+        { status: 409 }
+      );
+    }
+    
+    console.log("[FLOW] Stock validated");
+
     const normalizedPhone = normalizePhone(customer.phone);
 
     // Validate phone format (must be exactly 10 digits)
@@ -120,11 +258,23 @@ export async function POST(req: NextRequest) {
     // Check if user is logged in (optional)
     const authSupabase = await createServerClient();
     const { data: { user } } = await authSupabase.auth.getUser();
-    
-    // Service role client for DB operations
-    const supabase = createServiceRoleClient();
+
+    // Step 7: All validations passed - continue with order creation
+    // Create variant map for order creation (reuse data from validation)
+    const variantMap = new Map<string, VariantData>();
+    for (const variant of typedVariants) {
+      variantMap.set(variant.sku, {
+        id: variant.id,
+        sku: variant.sku,
+        price: variant.price,
+        cost: variant.cost,
+        stock: variant.stock,
+        product_uid: variant.product_uid,
+      });
+    }
 
     // PART 2: Calculate totals and build order items snapshot
+    // All items are valid, proceed with order creation
     let subtotal = 0;
     const orderItemsSnapshot: Array<{
       sku: string;
@@ -137,30 +287,17 @@ export async function POST(req: NextRequest) {
       subtotal: number;
     }> = [];
 
-    // Verify each item and fetch cost price for margin calculation
+    // Build order items snapshot (all variants are already validated and fetched)
     for (const item of items) {
-      // Fetch variant data (cost price for margin calculation)
-      const { data: variant, error: variantError } = await supabase
-        .from("product_variants")
-        .select("id, sku, price, cost, stock, product_uid")
-        .eq("sku", item.sku)
-        .single();
-
-      if (variantError || !variant) {
+      const variant = variantMap.get(item.sku);
+      
+      // This should never happen since we validated above, but TypeScript needs this check
+      if (!variant) {
         return NextResponse.json(
           { success: false, error: `Variant ${item.sku} not found` },
           { status: 400 }
         );
       }
-
-      const typedVariant = variant as {
-        id: string;
-        sku: string;
-        price: number | null;
-        cost: number | null;
-        stock: number | null;
-        product_uid: string;
-      };
 
       // NOTE: Per Phase 3.1 requirements, we do NOT deduct inventory here
       // Just validate the item exists and capture price
@@ -175,7 +312,7 @@ export async function POST(req: NextRequest) {
         size: item.size,
         quantity: item.quantity,
         selling_price: item.price,
-        cost_price: typedVariant.cost || 0,
+        cost_price: variant.cost || 0,
         subtotal: itemSubtotal,
       });
     }
@@ -193,10 +330,26 @@ export async function POST(req: NextRequest) {
     const totalPayable = subtotal;
 
     // PART 3: Customer handling
+    // Priority: 1) Provided customer_id (OTP-verified), 2) Logged-in user, 3) Guest
     let customerId: string | null = null;
+    let resolvedGuestSessionId: string | null = guest_session_id || null;
+    let checkoutSourceType = checkout_source || "direct";
 
-    if (user) {
-      // User is logged in - find or create customer record
+    if (providedCustomerId) {
+      // Customer ID provided from OTP-verified checkout
+      // Verify the customer exists
+      const { data: verifiedCustomer } = await supabase
+        .from("customers")
+        .select("id")
+        .eq("id", providedCustomerId)
+        .single();
+
+      if (verifiedCustomer) {
+        customerId = providedCustomerId;
+        checkoutSourceType = "otp_verified";
+      }
+    } else if (user) {
+      // User is logged in via Supabase Auth - find or create customer record
       const { data: existingCustomer } = await supabase
         .from("customers")
         .select("id")
@@ -205,6 +358,7 @@ export async function POST(req: NextRequest) {
 
       if (existingCustomer) {
         customerId = (existingCustomer as { id: string }).id;
+        checkoutSourceType = "logged_in";
       } else {
         // Create customer record for logged-in user
         const { data: newCustomer } = await supabase
@@ -215,16 +369,17 @@ export async function POST(req: NextRequest) {
             first_name: customer.name.split(" ")[0] || "",
             last_name: customer.name.split(" ").slice(1).join(" ") || "",
             phone: normalizedPhone,
-          } as any)
+          } as unknown as never)
           .select("id")
           .single();
 
         if (newCustomer) {
           customerId = (newCustomer as { id: string }).id;
+          checkoutSourceType = "logged_in";
         }
       }
     }
-    // For guests: customerId remains null (per Phase 3.1 requirements)
+    // For guests: customerId remains null, guest_session_id is used for tracking
 
     // Generate unique order number
     const orderNumber = generateOrderNumber();
@@ -256,33 +411,95 @@ export async function POST(req: NextRequest) {
         calculation_success: false,
         note: "Shipping cost will be calculated after payment",
       },
-      checkout_source: user ? "logged_in" : "guest",
+      checkout_source: checkoutSourceType,
+      guest_session_id: resolvedGuestSessionId,
     };
 
-    // PART 2: Create the order record
-    // Initial state: order_status='created', payment_status='pending'
-    // Include shipping address fields directly in order record
+    // =========================================================================
+    // ARCHITECTURAL INVARIANT: Razorpay order MUST be created BEFORE DB order
+    // This guarantees no orphan orders exist without payment capability
+    // =========================================================================
+    
+    // STEP 1: Validate amount before calling Razorpay
+    const amountInPaise = Math.round(totalPayable * 100);
+    
+    if (amountInPaise < 100) {
+      console.error("[FLOW] Amount too small for payment:", amountInPaise, "paise");
+      return NextResponse.json(
+        {
+          success: false,
+          error: "Order amount is too small for payment processing"
+        },
+        { status: 400 }
+      );
+    }
+
+    // STEP 2: Create Razorpay order FIRST (before any DB mutation)
+    // If this fails, we return 500 immediately - NO database order is created
+    let razorpayOrderId: string;
+    
+    try {
+      console.log("[FLOW] Creating Razorpay order FIRST (amount:", totalPayable, "INR)");
+
+      const razorpay = new Razorpay({
+        key_id: process.env.RAZORPAY_KEY_ID,
+        key_secret: process.env.RAZORPAY_KEY_SECRET,
+      });
+
+      const razorpayOrder = await razorpay.orders.create({
+        amount: amountInPaise,
+        currency: "INR",
+        receipt: orderNumber, // Use order_number as receipt (generated earlier)
+        notes: {
+          order_number: orderNumber,
+          customer_name: customer.name,
+          customer_phone: normalizedPhone,
+        },
+      });
+
+      if (!razorpayOrder || !razorpayOrder.id) {
+        console.error("[FLOW] Razorpay returned invalid response:", razorpayOrder);
+        throw new Error("Invalid Razorpay response - missing order ID");
+      }
+
+      razorpayOrderId = razorpayOrder.id;
+      console.log("[FLOW] Razorpay order created:", razorpayOrderId);
+
+    } catch (err) {
+      console.error("[FLOW] Razorpay order creation FAILED:", err);
+      // NO database rollback needed - we never created a DB order
+      return NextResponse.json(
+        {
+          success: false,
+          error: "Payment gateway initialization failed"
+        },
+        { status: 500 }
+      );
+    }
+
+    // STEP 3: Create DB order WITH razorpay_order_id in single atomic insert
+    // INVARIANT: Every order in DB has a valid razorpay_order_id
     const { data: order, error: orderError } = await supabase
       .from("orders")
       .insert({
         order_number: orderNumber,
-        customer_id: customerId, // Nullable for guests
-        user_id: null, // Not using legacy user_id
-        guest_phone: !user ? normalizedPhone : null, // For guest order tracking
-        guest_email: !user ? (customer.email || null) : null,
+        razorpay_order_id: razorpayOrderId, // CRITICAL: Set in initial insert
+        customer_id: customerId,
+        user_id: null,
+        guest_phone: !customerId ? normalizedPhone : null,
+        guest_email: !customerId ? (customer.email || null) : null,
         order_status: "created",
         payment_status: "pending",
         shipping_status: "pending",
         currency: "INR",
         subtotal: subtotal,
-        shipping_fee: 0, // Free shipping for customers
-        internal_shipping_cost: internalShippingCost, // What we pay to carrier
-        assumed_weight: assumedWeight, // Phase 3.4: Global default weight (1.5 kg)
+        shipping_fee: 0,
+        internal_shipping_cost: internalShippingCost,
+        assumed_weight: assumedWeight,
         tax_amount: 0,
         discount_amount: 0,
         total_amount: totalPayable,
         payment_provider: "razorpay",
-        // Shipping address fields - stored directly in order record
         shipping_name: customer.name,
         shipping_phone: normalizedPhone,
         shipping_email: customer.email || null,
@@ -300,7 +517,9 @@ export async function POST(req: NextRequest) {
       .single();
 
     if (orderError || !order) {
-      console.error("[CHECKOUT] Order creation failed:", orderError);
+      console.error("[FLOW] DB order creation failed:", orderError);
+      // Note: Razorpay order exists but DB order failed
+      // This is acceptable - Razorpay order will expire and no webhook will fire
       return NextResponse.json(
         { success: false, error: "Failed to create order", details: orderError?.message },
         { status: 500 }
@@ -308,57 +527,9 @@ export async function POST(req: NextRequest) {
     }
 
     const typedOrder = order as { id: string; order_number: string };
+    console.log("[FLOW] Order persisted with Razorpay ID");
 
-    // PART 3.2: Create Razorpay order server-side
-    let razorpayOrderId: string | null = null;
-    try {
-      // Convert amount to paise (Razorpay uses smallest currency unit)
-      const amountInPaise = Math.round(totalPayable * 100);
-      
-      // Minimum amount check (Razorpay requires at least 1 INR = 100 paise)
-      if (amountInPaise < 100) {
-        console.warn("[CHECKOUT] Amount too small for Razorpay:", amountInPaise);
-        // Still create order, but skip Razorpay order creation
-      } else {
-        // Create Razorpay order
-        const razorpayOrder = await createRazorpayOrder(
-          amountInPaise,
-          "INR",
-          typedOrder.order_number, // Receipt ID
-          {
-            order_id: typedOrder.id,
-            order_number: typedOrder.order_number,
-            customer_name: customer.name,
-            customer_phone: normalizedPhone,
-          }
-        );
-
-        razorpayOrderId = razorpayOrder.id;
-
-        // Update order with Razorpay order ID
-        const { error: razorpayUpdateError } = await supabase
-          .from("orders")
-          .update({
-            razorpay_order_id: razorpayOrderId,
-            payment_provider: "razorpay",
-            payment_status: "pending",
-            updated_at: new Date().toISOString(),
-          } as unknown as never)
-          .eq("id", typedOrder.id);
-
-        if (razorpayUpdateError) {
-          console.error("[CHECKOUT] Failed to update order with Razorpay ID:", razorpayUpdateError);
-          // Don't fail the order creation, but log the error
-        }
-      }
-    } catch (razorpayError: any) {
-      console.error("[CHECKOUT] Razorpay order creation failed:", razorpayError);
-      // Per Phase 3.2 requirements: Order must remain in DB even if Razorpay fails
-      // We'll still return success, but without razorpay_order_id
-      // Frontend can handle this case
-    }
-
-    // Create order_items records (normalized)
+    // STEP 4: Create order_items records
     const orderItemsForDb = orderItemsSnapshot.map((item) => ({
       order_id: typedOrder.id,
       product_uid: item.product_uid,
@@ -375,37 +546,30 @@ export async function POST(req: NextRequest) {
       .insert(orderItemsForDb as unknown as never);
 
     if (itemsError) {
-      console.error("[CHECKOUT] Order items creation failed:", itemsError);
-      // Don't fail the order, just log
+      console.error("[FLOW] Order items creation failed (non-fatal):", itemsError);
     }
 
-    // Log for analytics/audit
-    console.log("[CHECKOUT] Order created successfully:", {
+    // Log successful order creation
+    console.log("[FLOW] Order creation complete:", {
       order_id: typedOrder.id,
       order_number: typedOrder.order_number,
-      customer_type: user ? "logged_in" : "guest",
-      customer_id: customerId,
-      phone: normalizedPhone,
-      subtotal,
-      internal_shipping_cost: internalShippingCost,
+      razorpay_order_id: razorpayOrderId,
+      customer_type: customerId ? "verified" : "guest",
       total_payable: totalPayable,
     });
 
-    // Return success with order details (Phase 3.2)
-    // Includes Razorpay order ID for frontend checkout
+    // Return success with all required fields for Razorpay popup
     return NextResponse.json({
       success: true,
       order_id: typedOrder.id,
       order_number: typedOrder.order_number,
       subtotal: subtotal,
-      shipping_fee: 0, // Free for customer
+      shipping_fee: 0,
       total_payable: totalPayable,
       payment_gateway: "razorpay",
-      razorpay_order_id: razorpayOrderId || undefined,
+      razorpay_order_id: razorpayOrderId,
       razorpay_key_id: process.env.NEXT_PUBLIC_RAZORPAY_KEY_ID || undefined,
       created_at: new Date().toISOString(),
-      // For frontend to proceed to payment
-      next_step: razorpayOrderId ? "proceed_to_payment" : "payment_error",
     });
 
   } catch (error: unknown) {

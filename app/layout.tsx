@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
+import Script from "next/script";
 import "./globals.css";
 import CartProvider from "@/components/cart/CartProvider";
 import WishlistProvider from "@/components/wishlist/WishlistProvider";
@@ -27,6 +28,15 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="en">
+      <head>
+        {/* Razorpay SDK - Loaded globally with beforeInteractive to ensure availability
+            before any client components mount. This prevents Turbopack HMR issues
+            and eliminates the need for dynamic script injection. */}
+        <Script
+          src="https://checkout.razorpay.com/v1/checkout.js"
+          strategy="beforeInteractive"
+        />
+      </head>
       <body
         className={`${geistSans.variable} ${geistMono.variable} antialiased`}
       >

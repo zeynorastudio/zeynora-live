@@ -46,8 +46,39 @@ export async function createRazorpayOrder(
     });
 
     return order;
-  } catch (error: any) {
-    throw new Error(`Razorpay order creation failed: ${error.message}`);
+  } catch (error: unknown) {
+    // Extract error message from various Razorpay error formats
+    let errorMessage = "Unknown error";
+    
+    if (error instanceof Error) {
+      errorMessage = error.message;
+    } else if (typeof error === "object" && error !== null) {
+      // Razorpay SDK often returns errors in nested format
+      const err = error as Record<string, unknown>;
+      
+      // Try common Razorpay error formats
+      if (typeof err.description === "string") {
+        errorMessage = err.description;
+      } else if (typeof err.error === "object" && err.error !== null) {
+        const nestedErr = err.error as Record<string, unknown>;
+        if (typeof nestedErr.description === "string") {
+          errorMessage = nestedErr.description;
+        } else if (typeof nestedErr.reason === "string") {
+          errorMessage = nestedErr.reason;
+        }
+      } else if (typeof err.message === "string") {
+        errorMessage = err.message;
+      } else if (typeof err.statusMessage === "string") {
+        errorMessage = err.statusMessage;
+      }
+      
+      // Log full error for debugging
+      console.error("[RAZORPAY_ERROR] Full error object:", JSON.stringify(error, null, 2));
+    } else if (typeof error === "string") {
+      errorMessage = error;
+    }
+    
+    throw new Error(`Razorpay order creation failed: ${errorMessage}`);
   }
 }
 
